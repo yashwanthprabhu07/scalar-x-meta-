@@ -383,6 +383,7 @@ def run_agent(scenario: dict, progress_callback=None):
         required_actions=scenario["required_actions"],
         taken_actions=taken_actions,
         task_success=task_success,
+        expected_counts=scenario.get("expected_counts", {}),
     )
 
     reward_result["state_check_passed"]  = state_ok

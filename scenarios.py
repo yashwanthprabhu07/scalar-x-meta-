@@ -53,7 +53,7 @@ def check_deal_rescue(apps: dict) -> tuple:
     # 2. A follow-up meeting should exist (seed calendar has 2 meetings)
     follow_up_meetings = [
         m for m in calendar.meetings
-        if m["id"] not in ("meet_001", "meet_002")  # exclude seeded meetings
+        if m["id"] not in ("meet_001", "meet_002")
     ]
     if len(follow_up_meetings) > 0:
         reasons.append(f"✅ Follow-up meeting booked ({len(follow_up_meetings)} new meeting(s))")
@@ -122,7 +122,7 @@ def check_team_conflict(apps: dict) -> tuple:
     # 3. A sync meeting should be booked with both arjun and sneha (new meeting, not seeded)
     sync_meetings = [
         m for m in calendar.meetings
-        if m["id"] not in ("meet_001", "meet_002")  # exclude seeded
+        if m["id"] not in ("meet_001", "meet_002")
         and "arjun" in [a.lower() for a in m.get("attendees", [])]
         and "sneha" in [a.lower() for a in m.get("attendees", [])]
     ]
@@ -222,6 +222,13 @@ def check_client_onboarding(apps: dict) -> tuple:
 
 # ─────────────────────────────────────────────
 # SCENARIOS
+#
+# expected_counts: optional dict that tells the reward function how many
+# times each tool is legitimately expected to be called. If a tool is
+# called more than this count, the extras are penalized. If a tool isn't
+# listed here, it defaults to 1 (i.e. any repeat is an extra).
+# This lets scenarios that genuinely need multiple calls to the same
+# tool (e.g. creating two different tasks) score fully.
 # ─────────────────────────────────────────────
 
 SCENARIOS = [
@@ -255,6 +262,10 @@ SCENARIOS = [
             "book_meeting",
             "post_message",
         ],
+        "expected_counts": {
+            # Deal Rescue: each tool is called exactly once.
+            # No override needed — all defaults are 1.
+        },
         "success_check": check_deal_rescue,
     },
     {
@@ -285,6 +296,10 @@ SCENARIOS = [
             "post_message",
             "book_meeting",
         ],
+        "expected_counts": {
+            # Two reassignments: TASK-003 → Sneha, TASK-004 → Arjun
+            "assign_task": 2,
+        },
         "success_check": check_team_conflict,
     },
     {
@@ -317,6 +332,10 @@ SCENARIOS = [
             "book_meeting",
             "post_message",
         ],
+        "expected_counts": {
+            # Two tasks to create: one for arjun, one for sneha
+            "create_task": 2,
+        },
         "success_check": check_client_onboarding,
     },
 ]

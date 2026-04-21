@@ -10,7 +10,10 @@ from datetime import datetime
 episode_history = []
 
 
-def calculate_reward(required_actions: list, taken_actions: list, task_success: bool) -> dict:
+def calculate_reward(required_actions: list,
+                     taken_actions: list,
+                     task_success: bool,
+                     expected_counts: dict = None) -> dict:
     """
     Scores the agent's performance for one episode.
 
@@ -20,16 +23,23 @@ def calculate_reward(required_actions: list, taken_actions: list, task_success: 
       -5  for each required action that was MISSED
       -1  for every EXTRA call — this includes:
             * calls to tools not in required_actions
-            * duplicate calls to required tools (first call is free, repeats cost -1 each)
+            * calls to a required tool BEYOND its expected count
+              (e.g. if expected_counts says create_task: 2, then
+              calling create_task 3 times costs -1; 2 times is free)
 
     Args:
         required_actions: list of tool names the agent MUST call
         taken_actions:    list of tool names the agent actually called (in order)
         task_success:     True if all required actions were taken
-
-    Returns:
-        dict with score, breakdown, and metadata
+        expected_counts:  optional dict of {tool_name: expected_count}.
+                          If a required tool isn't listed here, the expected
+                          count defaults to 1. This lets scenarios legitimately
+                          require multiple calls to the same tool (e.g. creating
+                          two different tasks) without being penalized.
     """
+    if expected_counts is None:
+        expected_counts = {}
+
     score = 0
     breakdown = []
 
@@ -57,18 +67,20 @@ def calculate_reward(required_actions: list, taken_actions: list, task_success: 
         breakdown.append(f"-5 Required action missed: {action}")
 
     # -1 for each EXTRA call:
-    #   * duplicate calls to required tools (count beyond the first)
-    #   * every call to a non-required tool
+    #   * required tool called beyond its expected count
+    #   * any call to a non-required tool
     extra_count = 0
     for tool, count in taken_counts.items():
         if tool in required_set:
-            # First call is free, every repeat is an extra
-            extras = count - 1
+            # Default expected count is 1; scenarios can override
+            expected = expected_counts.get(tool, 1)
+            extras = count - expected
             if extras > 0:
                 extra_count += extras
                 score -= extras
                 breakdown.append(
-                    f"-{extras} Duplicate call(s) to required tool: {tool} (called {count}x)"
+                    f"-{extras} Excess call(s) to required tool: {tool} "
+                    f"(called {count}x, expected {expected})"
                 )
         else:
             # All calls to non-required tools are extras
@@ -78,7 +90,8 @@ def calculate_reward(required_actions: list, taken_actions: list, task_success: 
                 f"-{count} Unnecessary tool call(s): {tool} (called {count}x)"
             )
 
-    # Calculate max possible score for this scenario (for normalization later)
+    # Max possible score: +10 for success, +2 per distinct required action.
+    # (We don't reward multi-count in the max — the +2 is per distinct tool.)
     max_possible = 10 + (2 * len(required_set))
 
     return {
@@ -96,18 +109,7 @@ def calculate_reward(required_actions: list, taken_actions: list, task_success: 
 
 
 def log_episode(scenario_id: str, reward_result: dict, agent_steps: list) -> dict:
-    """
-    Saves the result of one episode to history.
-    This history is used to plot the improvement graph.
-
-    Args:
-        scenario_id:    which scenario was run
-        reward_result:  output from calculate_reward()
-        agent_steps:    list of all steps the agent took
-
-    Returns:
-        the episode dict that was saved
-    """
+    """Saves the result of one episode to history."""
     episode = {
         "episode_number": len(episode_history) + 1,
         "scenario_id": scenario_id,
