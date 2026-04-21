@@ -1,0 +1,282 @@
+# ============================================================
+# agent.py — The AI Agent Loop (Using Groq API — free & fast)
+# This is the brain of the project.
+# It sends tasks to Groq AI, gets tool call responses,
+# runs the tools on mock apps, and loops until done.
+# ============================================================
+
+import os
+import json
+from groq import Groq              # Groq — free and fast AI API
+from dotenv import load_dotenv
+
+# Load GROQ_API_KEY from .env file
+load_dotenv()
+
+from mock_apps import EmailApp, ChatApp, CRMApp, TaskApp, CalendarApp
+from tools import ALL_TOOLS
+from reward import calculate_reward, log_episode
+
+
+# ─────────────────────────────────────────────
+# CREATE FRESH APPS FOR EACH EPISODE
+# ─────────────────────────────────────────────
+def create_fresh_apps():
+    """Creates brand new instances of all 5 apps. Called at start of every episode."""
+    return {
+        "email":    EmailApp(),
+        "chat":     ChatApp(),
+        "crm":      CRMApp(),
+        "tasks":    TaskApp(),
+        "calendar": CalendarApp(),
+    }
+
+
+# ─────────────────────────────────────────────
+# TOOL ROUTER — runs the right app method
+# ─────────────────────────────────────────────
+def execute_tool(tool_name: str, tool_input: dict, apps: dict) -> str:
+    """
+    Given a tool name and inputs from the AI,
+    calls the right method on the right app.
+    Returns result as a JSON string.
+    """
+    email    = apps["email"]
+    chat     = apps["chat"]
+    crm      = apps["crm"]
+    tasks    = apps["tasks"]
+    calendar = apps["calendar"]
+
+    if tool_name == "read_inbox":
+        result = email.read_inbox()
+    elif tool_name == "read_email":
+        result = email.read_email(tool_input["email_id"])
+    elif tool_name == "send_email":
+        result = email.send_email(tool_input["to"], tool_input["subject"], tool_input["body"])
+    elif tool_name == "reply_email":
+        result = email.reply_email(tool_input["email_id"], tool_input["body"])
+    elif tool_name == "list_channels":
+        result = chat.list_channels()
+    elif tool_name == "read_channel":
+        result = chat.read_channel(tool_input["channel"])
+    elif tool_name == "post_message":
+        result = chat.post_message(tool_input["channel"], tool_input["message"])
+    elif tool_name == "get_deal":
+        result = crm.get_deal(tool_input["deal_id"])
+    elif tool_name == "update_deal_stage":
+        result = crm.update_deal_stage(tool_input["deal_id"], tool_input["new_stage"])
+    elif tool_name == "add_note":
+        result = crm.add_note(tool_input["deal_id"], tool_input["note"])
+    elif tool_name == "get_contact":
+        result = crm.get_contact(tool_input["email"])
+    elif tool_name == "create_contact":
+        result = crm.create_contact(
+            tool_input["name"], tool_input["email"],
+            tool_input["company"], tool_input.get("phone", "")
+        )
+    elif tool_name == "list_tasks":
+        result = tasks.list_tasks()
+    elif tool_name == "get_task":
+        result = tasks.get_task(tool_input["task_id"])
+    elif tool_name == "create_task":
+        result = tasks.create_task(
+            tool_input["title"], tool_input["assigned_to"],
+            tool_input.get("priority", "Medium")
+        )
+    elif tool_name == "assign_task":
+        result = tasks.assign_task(tool_input["task_id"], tool_input["user"])
+    elif tool_name == "close_task":
+        result = tasks.close_task(tool_input["task_id"])
+    elif tool_name == "list_meetings":
+        result = calendar.list_meetings(tool_input.get("date"))
+    elif tool_name == "check_conflicts":
+        result = calendar.check_conflicts(
+            tool_input["date"], tool_input["time"], tool_input["attendees"]
+        )
+    elif tool_name == "book_meeting":
+        result = calendar.book_meeting(
+            tool_input["title"], tool_input["attendees"],
+            tool_input["date"], tool_input["time"],
+            tool_input.get("duration_mins", 60)
+        )
+    else:
+        result = {"error": f"Unknown tool: {tool_name}"}
+
+    return json.dumps(result, indent=2)
+
+
+# ─────────────────────────────────────────────
+# MAIN AGENT LOOP
+# ─────────────────────────────────────────────
+def run_agent(scenario: dict, progress_callback=None):
+    """
+    Runs the AI agent on one scenario using the Groq API (free & fast).
+
+    Args:
+        scenario:          one of the dicts from scenarios.py
+        progress_callback: optional function called after each tool use
+                           (used to send live updates to Streamlit)
+
+    Returns:
+        dict with episode results (steps, score, success)
+    """
+
+    # Fresh apps for this episode
+    apps = create_fresh_apps()
+
+    # ── GROQ CLIENT ──────────────────────────────────────────
+    # Groq is free, fast, and has great tool-use support
+    client = Groq(
+        api_key=os.getenv("GROQ_API_KEY"),
+    )
+
+    # Track what the agent does
+    agent_steps    = []   # Full step details
+    taken_actions  = []   # Just tool names (for reward calculation)
+
+    # Build tools in OpenAI function-calling format
+    grok_tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": t["name"],
+                "description": t["description"],
+                "parameters": t["input_schema"],
+            }
+        }
+        for t in ALL_TOOLS
+    ]
+
+    # Start the conversation
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are an efficient AI employee at a company. "
+                "You have access to 5 company apps: Email, Chat, CRM, Tasks, and Calendar. "
+                "Complete all the steps in the user's task using the available tools. "
+                "Be thorough — use every tool needed to fully complete the task."
+            )
+        },
+        {
+            "role": "user",
+            "content": scenario["agent_prompt"]
+        }
+    ]
+
+    print(f"\n{'='*60}")
+    print(f"RUNNING SCENARIO: {scenario['name']}")
+    print(f"{'='*60}\n")
+
+    max_iterations = 20   # Safety limit — prevents infinite loops
+
+    # ── THE MAIN LOOP ─────────────────────────────────────────
+    for iteration in range(1, max_iterations + 1):
+        print(f"[Iteration {iteration}] Asking Groq what to do next...")
+
+        # Ask Groq what to do (it will either call a tool or say it's done)
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",  # Best free Groq model for tool use
+            max_tokens=4096,
+            tools=grok_tools,
+            tool_choice="auto",   # Let Groq decide when to call tools
+            messages=messages,
+        )
+
+        message    = response.choices[0].message
+        finish_reason = response.choices[0].finish_reason
+
+        print(f"  → Finish reason: {finish_reason}")
+
+        # ── AGENT IS DONE (no more tool calls) ───────────────
+        if finish_reason == "stop" or not message.tool_calls:
+            final_text = message.content or "Task completed."
+            print(f"  ✅ Agent finished: {final_text[:100]}")
+            break
+
+        # ── PROCESS TOOL CALLS ───────────────────────────────
+        tool_calls = message.tool_calls  # List of tool calls Groq wants to make
+
+        # Add Groq's response (with tool calls) to conversation history
+        messages.append({
+            "role": "assistant",
+            "content": message.content,
+            "tool_calls": [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments,
+                    }
+                }
+                for tc in tool_calls
+            ]
+        })
+
+        # Run each tool call and collect results
+        for tc in tool_calls:
+            tool_name  = tc.function.name
+            tool_input = json.loads(tc.function.arguments)
+            tool_id    = tc.id
+
+            print(f"  🔧 Tool: {tool_name}({json.dumps(tool_input)[:80]})")
+
+            # Actually run the tool on our mock apps
+            tool_result = execute_tool(tool_name, tool_input, apps)
+
+            print(f"  📦 Result: {tool_result[:100]}...")
+
+            # Track this step
+            step = {
+                "iteration":   iteration,
+                "tool_name":   tool_name,
+                "tool_input":  tool_input,
+                "tool_result": tool_result,
+            }
+            agent_steps.append(step)
+            taken_actions.append(tool_name)
+
+            # Send step to Streamlit dashboard (live feed)
+            if progress_callback:
+                progress_callback(step)
+
+            # Add tool result back into conversation so Groq can see what happened
+            messages.append({
+                "role":         "tool",
+                "tool_call_id": tool_id,
+                "content":      tool_result,
+            })
+
+    # ── EPISODE COMPLETE ─────────────────────────────────────
+    # Check if all required actions were taken
+    required_set = set(scenario["required_actions"])
+    taken_set    = set(taken_actions)
+    task_success = required_set.issubset(taken_set)
+
+    # Score the episode
+    reward_result = calculate_reward(
+        required_actions=scenario["required_actions"],
+        taken_actions=taken_actions,
+        task_success=task_success,
+    )
+
+    # Save to history
+    episode = log_episode(
+        scenario_id=scenario["id"],
+        reward_result=reward_result,
+        agent_steps=agent_steps,
+    )
+
+    print(f"\n{'─'*40}")
+    print(f"SCORE:   {reward_result['score']}")
+    print(f"SUCCESS: {task_success}")
+    for line in reward_result["breakdown"]:
+        print(f"  {line}")
+
+    return {
+        "episode": episode,
+        "reward":  reward_result,
+        "steps":   agent_steps,
+        "apps":    apps,
+    }
