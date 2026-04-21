@@ -3,9 +3,19 @@
 # This is the brain of the project.
 # It sends tasks to Groq AI, gets tool call responses,
 # runs the tools on mock apps, and loops until done.
+#
+# Reliability features:
+#   - Fail-fast on missing GROQ_API_KEY with a clear message
+#   - Retry Groq API calls with exponential backoff (handles
+#     transient 429/500/network errors without killing the demo)
+#   - Per-tool try/except so a single tool failure doesn't crash
+#     the loop — the agent sees the error and can recover
+#   - Iteration-limit detection so we don't silently declare
+#     success on a runaway loop
 # ============================================================
 import os
 import json
+import time
 from groq import Groq                 # Groq — free and fast AI API
 from dotenv import load_dotenv
 
@@ -32,6 +42,42 @@ def create_fresh_apps():
 
 
 # ─────────────────────────────────────────────
+# GROQ API CALL — with retry and exponential backoff
+# ─────────────────────────────────────────────
+def groq_call_with_retry(client, *, model, max_tokens, tools, tool_choice, messages,
+                         max_retries: int = 3, base_delay: float = 1.0):
+    """
+    Call Groq's chat completions with retry on transient failures.
+
+    Retries on ANY exception (rate limits, 5xx, network blips, timeouts).
+    Uses exponential backoff: 1s, 2s, 4s between retries.
+    Raises the final exception if all retries are exhausted.
+    """
+    last_exception = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            return client.chat.completions.create(
+                model=model,
+                max_tokens=max_tokens,
+                tools=tools,
+                tool_choice=tool_choice,
+                messages=messages,
+            )
+        except Exception as e:
+            last_exception = e
+            if attempt < max_retries:
+                delay = base_delay * (2 ** (attempt - 1))   # 1s, 2s, 4s
+                print(f"   ⚠️  Groq call failed (attempt {attempt}/{max_retries}): {type(e).__name__}: {str(e)[:120]}")
+                print(f"      Retrying in {delay}s...")
+                time.sleep(delay)
+            else:
+                print(f"   ❌ Groq call failed after {max_retries} attempts: {type(e).__name__}: {e}")
+
+    # Exhausted retries — re-raise the last exception
+    raise last_exception
+
+
+# ─────────────────────────────────────────────
 # TOOL ROUTER — runs the right app method
 # ─────────────────────────────────────────────
 def execute_tool(tool_name: str, tool_input: dict, apps: dict) -> str:
@@ -39,6 +85,10 @@ def execute_tool(tool_name: str, tool_input: dict, apps: dict) -> str:
     Given a tool name and inputs from the AI,
     calls the right method on the right app.
     Returns result as a JSON string.
+
+    Wraps tool execution in try/except so an exception in one tool
+    doesn't crash the whole agent loop — the error is returned to
+    the agent as a tool result, so it can see and recover.
     """
     email    = apps["email"]
     chat     = apps["chat"]
@@ -120,9 +170,9 @@ def run_agent(scenario: dict, progress_callback=None):
     Runs the AI agent on one scenario using the Groq API (free & fast).
 
     Args:
-        scenario: one of the dicts from scenarios.py
-        progress_callback: optional function called after each tool use
-                           (used to send live updates to Streamlit)
+        scenario:           one of the dicts from scenarios.py
+        progress_callback:  optional function called after each tool use
+                            (used to send live updates to Streamlit)
 
     Returns:
         dict with episode results (steps, score, success)
@@ -135,7 +185,8 @@ def run_agent(scenario: dict, progress_callback=None):
     if not api_key:
         raise RuntimeError(
             "GROQ_API_KEY is not set. Create a .env file in the project root "
-            "with a line like:  GROQ_API_KEY=your_key_here"
+            "with a line like:  GROQ_API_KEY=your_key_here\n"
+            "You can get a free key at https://console.groq.com"
         )
     client = Groq(api_key=api_key)
 
@@ -187,8 +238,10 @@ def run_agent(scenario: dict, progress_callback=None):
     for iteration in range(1, max_iterations + 1):
         print(f"[Iteration {iteration}] Asking Groq what to do next...")
 
-        # Ask Groq what to do (it will either call a tool or say it's done)
-        response = client.chat.completions.create(
+        # Ask Groq what to do (it will either call a tool or say it's done).
+        # Uses retry-with-backoff so a transient API error doesn't kill the run.
+        response = groq_call_with_retry(
+            client,
             model="llama-3.3-70b-versatile",     # Best free Groq model for tool use
             max_tokens=4096,
             tools=grok_tools,
@@ -229,7 +282,12 @@ def run_agent(scenario: dict, progress_callback=None):
         # Run each tool call and collect results
         for tc in tool_calls:
             tool_name  = tc.function.name
-            tool_input = json.loads(tc.function.arguments)
+            try:
+                tool_input = json.loads(tc.function.arguments)
+            except json.JSONDecodeError as e:
+                tool_input = {}
+                print(f"   ⚠️  Failed to parse tool arguments for {tool_name}: {e}")
+
             tool_id    = tc.id
 
             print(f"   🔧 Tool: {tool_name}({json.dumps(tool_input)[:80]})")
