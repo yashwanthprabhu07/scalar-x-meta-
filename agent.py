@@ -12,6 +12,7 @@
 #     the loop — the agent sees the error and can recover
 #   - Iteration-limit detection so we don't silently declare
 #     success on a runaway loop
+#   - Dispatch-dict tool routing (clean, extensible, maintainable)
 # ============================================================
 import os
 import json
@@ -78,86 +79,76 @@ def groq_call_with_retry(client, *, model, max_tokens, tools, tool_choice, messa
 
 
 # ─────────────────────────────────────────────
-# TOOL ROUTER — runs the right app method
+# TOOL DISPATCH TABLE
+# Maps tool_name → lambda(tool_input, apps) → dict result
+# This is cleaner than a long if/elif chain and trivially extensible:
+# to add a new tool, register it in ALL_TOOLS (tools.py) and add a
+# line to this dict. That's it.
 # ─────────────────────────────────────────────
+TOOL_DISPATCH = {
+    # ── Email ─────────────────────────────────────────────
+    "read_inbox":         lambda ti, apps: apps["email"].read_inbox(),
+    "read_email":         lambda ti, apps: apps["email"].read_email(ti["email_id"]),
+    "send_email":         lambda ti, apps: apps["email"].send_email(ti["to"], ti["subject"], ti["body"]),
+    "reply_email":        lambda ti, apps: apps["email"].reply_email(ti["email_id"], ti["body"]),
+
+    # ── Chat ──────────────────────────────────────────────
+    "list_channels":      lambda ti, apps: apps["chat"].list_channels(),
+    "read_channel":       lambda ti, apps: apps["chat"].read_channel(ti["channel"]),
+    "post_message":       lambda ti, apps: apps["chat"].post_message(ti["channel"], ti["message"]),
+
+    # ── CRM ───────────────────────────────────────────────
+    "get_deal":           lambda ti, apps: apps["crm"].get_deal(ti["deal_id"]),
+    "update_deal_stage":  lambda ti, apps: apps["crm"].update_deal_stage(ti["deal_id"], ti["new_stage"]),
+    "add_note":           lambda ti, apps: apps["crm"].add_note(ti["deal_id"], ti["note"]),
+    "get_contact":        lambda ti, apps: apps["crm"].get_contact(ti["email"]),
+    "create_contact":     lambda ti, apps: apps["crm"].create_contact(
+                              ti["name"], ti["email"], ti["company"], ti.get("phone", "")
+                          ),
+
+    # ── Tasks ─────────────────────────────────────────────
+    "list_tasks":         lambda ti, apps: apps["tasks"].list_tasks(),
+    "get_task":           lambda ti, apps: apps["tasks"].get_task(ti["task_id"]),
+    "create_task":        lambda ti, apps: apps["tasks"].create_task(
+                              ti["title"], ti["assigned_to"], ti.get("priority", "Medium")
+                          ),
+    "assign_task":        lambda ti, apps: apps["tasks"].assign_task(ti["task_id"], ti["user"]),
+    "close_task":         lambda ti, apps: apps["tasks"].close_task(ti["task_id"]),
+
+    # ── Calendar ──────────────────────────────────────────
+    "list_meetings":      lambda ti, apps: apps["calendar"].list_meetings(ti.get("date")),
+    "check_conflicts":    lambda ti, apps: apps["calendar"].check_conflicts(
+                              ti["date"], ti["time"], ti["attendees"]
+                          ),
+    "book_meeting":       lambda ti, apps: apps["calendar"].book_meeting(
+                              ti["title"], ti["attendees"],
+                              ti["date"], ti["time"],
+                              ti.get("duration_mins", 60)
+                          ),
+}
+
+
 def execute_tool(tool_name: str, tool_input: dict, apps: dict) -> str:
     """
-    Given a tool name and inputs from the AI,
-    calls the right method on the right app.
-    Returns result as a JSON string.
+    Dispatches a tool call to the right app method and returns the result as JSON.
 
-    Wraps tool execution in try/except so an exception in one tool
-    doesn't crash the whole agent loop — the error is returned to
-    the agent as a tool result, so it can see and recover.
+    Wraps execution in try/except so that:
+      - an unknown tool is reported cleanly (not a KeyError crash)
+      - a missing argument is reported cleanly (not a KeyError crash)
+      - any other app-level exception is returned to the agent as a tool
+        result, so the agent can see the error and recover instead of
+        killing the whole episode.
     """
-    email    = apps["email"]
-    chat     = apps["chat"]
-    crm      = apps["crm"]
-    tasks    = apps["tasks"]
-    calendar = apps["calendar"]
+    handler = TOOL_DISPATCH.get(tool_name)
+    if handler is None:
+        return json.dumps({"error": f"Unknown tool: {tool_name}"}, indent=2)
 
     try:
-        if tool_name == "read_inbox":
-            result = email.read_inbox()
-        elif tool_name == "read_email":
-            result = email.read_email(tool_input["email_id"])
-        elif tool_name == "send_email":
-            result = email.send_email(tool_input["to"], tool_input["subject"], tool_input["body"])
-        elif tool_name == "reply_email":
-            result = email.reply_email(tool_input["email_id"], tool_input["body"])
-
-        elif tool_name == "list_channels":
-            result = chat.list_channels()
-        elif tool_name == "read_channel":
-            result = chat.read_channel(tool_input["channel"])
-        elif tool_name == "post_message":
-            result = chat.post_message(tool_input["channel"], tool_input["message"])
-
-        elif tool_name == "get_deal":
-            result = crm.get_deal(tool_input["deal_id"])
-        elif tool_name == "update_deal_stage":
-            result = crm.update_deal_stage(tool_input["deal_id"], tool_input["new_stage"])
-        elif tool_name == "add_note":
-            result = crm.add_note(tool_input["deal_id"], tool_input["note"])
-        elif tool_name == "get_contact":
-            result = crm.get_contact(tool_input["email"])
-        elif tool_name == "create_contact":
-            result = crm.create_contact(
-                tool_input["name"], tool_input["email"],
-                tool_input["company"], tool_input.get("phone", "")
-            )
-
-        elif tool_name == "list_tasks":
-            result = tasks.list_tasks()
-        elif tool_name == "get_task":
-            result = tasks.get_task(tool_input["task_id"])
-        elif tool_name == "create_task":
-            result = tasks.create_task(
-                tool_input["title"], tool_input["assigned_to"],
-                tool_input.get("priority", "Medium")
-            )
-        elif tool_name == "assign_task":
-            result = tasks.assign_task(tool_input["task_id"], tool_input["user"])
-        elif tool_name == "close_task":
-            result = tasks.close_task(tool_input["task_id"])
-
-        elif tool_name == "list_meetings":
-            result = calendar.list_meetings(tool_input.get("date"))
-        elif tool_name == "check_conflicts":
-            result = calendar.check_conflicts(
-                tool_input["date"], tool_input["time"], tool_input["attendees"]
-            )
-        elif tool_name == "book_meeting":
-            result = calendar.book_meeting(
-                tool_input["title"], tool_input["attendees"],
-                tool_input["date"], tool_input["time"],
-                tool_input.get("duration_mins", 60)
-            )
-        else:
-            result = {"error": f"Unknown tool: {tool_name}"}
+        result = handler(tool_input, apps)
+    except KeyError as e:
+        result = {"error": f"Tool '{tool_name}' missing required argument: {e}"}
     except Exception as e:
-        # Return error as tool result so the agent can see it and recover
-        result = {"error": f"Tool '{tool_name}' raised an exception: {str(e)}"}
+        result = {"error": f"Tool '{tool_name}' raised an exception: {type(e).__name__}: {str(e)}"}
 
     return json.dumps(result, indent=2)
 
@@ -292,7 +283,7 @@ def run_agent(scenario: dict, progress_callback=None):
 
             print(f"   🔧 Tool: {tool_name}({json.dumps(tool_input)[:80]})")
 
-            # Actually run the tool on our mock apps
+            # Actually run the tool on our mock apps (dispatches via TOOL_DISPATCH)
             tool_result = execute_tool(tool_name, tool_input, apps)
             print(f"   📦 Result: {tool_result[:100]}...")
 
