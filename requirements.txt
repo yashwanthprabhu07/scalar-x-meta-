@@ -1,5 +1,8 @@
-anthropic
-streamlit
-python-dotenv
-pandas
-plotly
+# Core agent + LLM
+groq==1.2.0
+python-dotenv==1.2.2
+
+# Streamlit dashboard
+streamlit==1.56.0
+plotly==6.7.0
+pandas==3.0.2
