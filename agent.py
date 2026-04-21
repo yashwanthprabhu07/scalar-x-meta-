@@ -8,42 +8,43 @@
 #   - Fail-fast on missing GROQ_API_KEY with a clear message
 #   - Two-key automatic failover: on rate-limit errors,
 #     automatically switches to the backup API key
-#   - Retry Groq API calls with exponential backoff (handles
-#     transient 429/500/network errors without killing the demo)
-#   - Per-tool try/except so a single tool failure doesn't crash
-#     the loop — the agent sees the error and can recover
-#   - Iteration-limit detection so we don't silently declare
-#     success on a runaway loop
+#   - Retry Groq API calls with exponential backoff
+#   - Per-tool try/except so one tool failure doesn't crash the loop
+#   - Iteration-limit detection so we don't silently declare success
 #   - Dispatch-dict tool routing (clean, extensible, maintainable)
+#
+# Self-improvement features (NEW):
+#   - Loads "lessons from past attempts" into the system prompt
+#     at the start of each episode (memory.format_lessons_for_prompt)
+#   - After each episode, asks Groq to distill a lesson from the
+#     trajectory + reward and saves it for future episodes
+#     (lesson_extractor + memory.add_lesson)
+#   - Lessons are persisted to agent_memory.json across restarts
 # ============================================================
 import os
 import json
 import time
-from groq import Groq                 # Groq — free and fast AI API
+from groq import Groq
 from dotenv import load_dotenv
 
-# Load GROQ_API_KEY and GROQ_API_KEY_BACKUP from .env file
 load_dotenv()
 
 from mock_apps import EmailApp, ChatApp, CRMApp, TaskApp, CalendarApp
 from tools import ALL_TOOLS
 from reward import calculate_reward, log_episode
 
+# NEW: memory + lesson extractor for self-improvement
+from memory import format_lessons_for_prompt, add_lesson, get_lessons
+from lesson_extractor import extract_lesson
+
 
 # ─────────────────────────────────────────────
-# GROQ CLIENT POOL — supports multiple keys with automatic failover
+# GROQ CLIENT POOL — multi-key automatic failover
 # ─────────────────────────────────────────────
 class GroqClientPool:
     """
     Manages one or more Groq API keys with automatic failover.
-
-    On a rate-limit error (HTTP 429 / RateLimitError), this pool
-    transparently switches to the next available key. Other errors
-    are retried on the same key (transient network/server issues).
-
-    Why this design matters: retrying a rate-limited key just gets
-    rate-limited again. The Step 5 retry logic alone couldn't help
-    when a key was exhausted. Failover is the right fix.
+    On rate-limit errors, transparently switches to the next key.
     """
 
     def __init__(self, api_keys: list):
@@ -56,41 +57,30 @@ class GroqClientPool:
         self.api_keys = api_keys
         self.current_index = 0
         self.clients = [Groq(api_key=k) for k in api_keys]
-        # Track which keys are known rate-limited so we don't loop back to them
         self.exhausted = [False] * len(api_keys)
         print(f"   🔑 Groq client pool initialized with {len(api_keys)} key(s)")
 
-    def _current_client(self):
+    def current_client(self) -> Groq:
+        """Return the currently active Groq client (for callers who need direct access)."""
         return self.clients[self.current_index]
 
     def _mark_exhausted_and_rotate(self):
-        """Mark the current key as exhausted and advance to the next live key."""
         self.exhausted[self.current_index] = True
         print(f"   🔄 Key #{self.current_index + 1} exhausted, trying next key...")
-
         for i in range(len(self.clients)):
             next_idx = (self.current_index + 1 + i) % len(self.clients)
             if not self.exhausted[next_idx]:
                 self.current_index = next_idx
                 print(f"   ✅ Failed over to key #{self.current_index + 1}")
                 return True
-        # All keys exhausted
         return False
 
     def call(self, *, model, max_tokens, tools, tool_choice, messages,
              max_retries_per_key: int = 3, base_delay: float = 1.0):
-        """
-        Call Groq with automatic failover on rate limits + retry on transient errors.
-
-        Strategy:
-          - On rate-limit / 429 / quota errors: immediately fail over to next key.
-          - On other errors (network, 500, timeout): retry same key with backoff.
-          - If all keys exhausted OR all retries on last key fail: raise.
-        """
         last_exception = None
 
-        while True:  # loops on key rotation; retries inside
-            client = self._current_client()
+        while True:
+            client = self.current_client()
 
             for attempt in range(1, max_retries_per_key + 1):
                 try:
@@ -113,16 +103,15 @@ class GroqClientPool:
                     )
 
                     if is_rate_limit:
-                        # Don't waste retries on a rate-limited key — fail over now
                         print(f"   ⚠️  Rate limit hit on key #{self.current_index + 1}: {str(e)[:120]}")
                         if self._mark_exhausted_and_rotate():
-                            break  # break inner retry loop, outer loop picks new client
+                            break
                         else:
                             print("   ❌ All keys exhausted.")
                             raise
 
                     if attempt < max_retries_per_key:
-                        delay = base_delay * (2 ** (attempt - 1))  # 1s, 2s, 4s
+                        delay = base_delay * (2 ** (attempt - 1))
                         print(f"   ⚠️  Groq call failed (attempt {attempt}/{max_retries_per_key}, key #{self.current_index + 1}): "
                               f"{type(e).__name__}: {str(e)[:120]}")
                         print(f"      Retrying in {delay}s...")
@@ -130,14 +119,10 @@ class GroqClientPool:
                     else:
                         print(f"   ❌ Groq call failed after {max_retries_per_key} attempts on key #{self.current_index + 1}: "
                               f"{type(e).__name__}: {e}")
-                        # Exhausted retries on this key — raise, don't silently fail over
-                        # (because this is NOT a rate limit; it's a real error)
                         raise
-            # If we got here via `break`, we rotated — continue outer loop to use new client
 
 
 def _load_groq_keys() -> list:
-    """Collect all Groq API keys from the environment (primary + backup)."""
     keys = []
     primary = os.getenv("GROQ_API_KEY")
     if primary:
@@ -149,10 +134,9 @@ def _load_groq_keys() -> list:
 
 
 # ─────────────────────────────────────────────
-# CREATE FRESH APPS FOR EACH EPISODE
+# FRESH APPS PER EPISODE
 # ─────────────────────────────────────────────
 def create_fresh_apps():
-    """Creates brand new instances of all 5 apps. Called at start of every episode."""
     return {
         "email":    EmailApp(),
         "chat":     ChatApp(),
@@ -164,7 +148,6 @@ def create_fresh_apps():
 
 # ─────────────────────────────────────────────
 # TOOL DISPATCH TABLE
-# Maps tool_name → lambda(tool_input, apps) → dict result
 # ─────────────────────────────────────────────
 TOOL_DISPATCH = {
     # ── Email ─────────────────────────────────────────────
@@ -210,10 +193,6 @@ TOOL_DISPATCH = {
 
 
 def execute_tool(tool_name: str, tool_input: dict, apps: dict) -> str:
-    """
-    Dispatches a tool call to the right app method and returns the result as JSON.
-    Wraps execution in try/except so errors become tool results the agent can see.
-    """
     handler = TOOL_DISPATCH.get(tool_name)
     if handler is None:
         return json.dumps({"error": f"Unknown tool: {tool_name}"}, indent=2)
@@ -229,24 +208,31 @@ def execute_tool(tool_name: str, tool_input: dict, apps: dict) -> str:
 
 
 # ─────────────────────────────────────────────
+# BASE SYSTEM PROMPT
+# Lessons (if any exist) are appended to this at runtime.
+# ─────────────────────────────────────────────
+_BASE_SYSTEM_PROMPT = (
+    "You are an efficient AI employee at a company. "
+    "You have access to 5 company apps: Email, Chat, CRM, Tasks, and Calendar. "
+    "Complete all the steps in the user's task using the available tools. "
+    "Be thorough — use every tool needed to fully complete the task. "
+    "IMPORTANT: Do not call the same tool more than once unless you have a clear new reason. "
+    "Before acting, read the relevant state first (inbox, channel, task). "
+    "If a tool returns an error, examine the error message and try a different approach."
+)
+
+
+# ─────────────────────────────────────────────
 # MAIN AGENT LOOP
 # ─────────────────────────────────────────────
 def run_agent(scenario: dict, progress_callback=None):
     """
-    Runs the AI agent on one scenario using the Groq API (free & fast).
-
-    Args:
-        scenario:           one of the dicts from scenarios.py
-        progress_callback:  optional function called after each tool use
-                            (used to send live updates to Streamlit)
-
-    Returns:
-        dict with episode results (steps, score, success)
+    Runs the AI agent on one scenario. Loads lessons from past attempts
+    into the system prompt, runs the episode, then extracts a new lesson
+    from the trajectory and saves it for future episodes.
     """
-    # Fresh apps for this episode
     apps = create_fresh_apps()
 
-    # ── GROQ CLIENT POOL (supports primary + backup key failover) ──
     keys = _load_groq_keys()
     if not keys:
         raise RuntimeError(
@@ -258,11 +244,26 @@ def run_agent(scenario: dict, progress_callback=None):
         )
     pool = GroqClientPool(keys)
 
-    # Track what the agent does
-    agent_steps   = []   # Full step details
-    taken_actions = []   # Just tool names (for reward calculation)
+    # ── LOAD LESSONS FROM MEMORY ─────────────────────────────
+    # If we've run this scenario before, we may have lessons.
+    # Inject them into the system prompt for this run.
+    scenario_id = scenario["id"]
+    lessons_text = format_lessons_for_prompt(scenario_id)
+    prior_lessons = get_lessons(scenario_id)
 
-    # Build tools in OpenAI function-calling format
+    if prior_lessons:
+        print(f"   🧠 Loaded {len(prior_lessons)} lesson(s) from memory for this scenario")
+        for i, lesson in enumerate(prior_lessons, 1):
+            print(f"      {i}. {lesson['text'][:100]}")
+    else:
+        print(f"   🧠 No prior lessons for this scenario — running without memory")
+
+    system_prompt = _BASE_SYSTEM_PROMPT + lessons_text
+
+    # Tracking
+    agent_steps   = []
+    taken_actions = []
+
     grok_tools = [
         {
             "type": "function",
@@ -275,43 +276,27 @@ def run_agent(scenario: dict, progress_callback=None):
         for t in ALL_TOOLS
     ]
 
-    # Start the conversation
     messages = [
-        {
-            "role": "system",
-            "content": (
-                "You are an efficient AI employee at a company. "
-                "You have access to 5 company apps: Email, Chat, CRM, Tasks, and Calendar. "
-                "Complete all the steps in the user's task using the available tools. "
-                "Be thorough — use every tool needed to fully complete the task. "
-                "IMPORTANT: Do not call the same tool more than once unless you have a clear new reason. "
-                "Before acting, read the relevant state first (inbox, channel, task). "
-                "If a tool returns an error, examine the error message and try a different approach."
-            )
-        },
-        {
-            "role": "user",
-            "content": scenario["agent_prompt"]
-        }
+        {"role": "system", "content": system_prompt},
+        {"role": "user",   "content": scenario["agent_prompt"]},
     ]
 
     print(f"\n{'='*60}")
     print(f"RUNNING SCENARIO: {scenario['name']}")
     print(f"{'='*60}\n")
 
-    max_iterations = 20          # Safety limit — prevents infinite loops
+    max_iterations = 20
     hit_iteration_limit = False
 
-    # ── THE MAIN LOOP ─────────────────────────────────────────
+    # ── MAIN LOOP ─────────────────────────────────────────
     for iteration in range(1, max_iterations + 1):
         print(f"[Iteration {iteration}] Asking Groq what to do next...")
 
-        # Call Groq with automatic failover + retry
         response = pool.call(
-            model="llama-3.3-70b-versatile",     # Best free Groq model for tool use
+            model="llama-3.3-70b-versatile",
             max_tokens=4096,
             tools=grok_tools,
-            tool_choice="auto",                  # Let Groq decide when to call tools
+            tool_choice="auto",
             messages=messages,
         )
 
@@ -319,13 +304,11 @@ def run_agent(scenario: dict, progress_callback=None):
         finish_reason = response.choices[0].finish_reason
         print(f"   → Finish reason: {finish_reason}")
 
-        # ── AGENT IS DONE (no more tool calls) ───────────────
         if finish_reason == "stop" or not message.tool_calls:
             final_text = message.content or "Task completed."
             print(f"   ✅ Agent finished: {final_text[:100]}")
             break
 
-        # ── PROCESS TOOL CALLS ───────────────────────────────
         tool_calls = message.tool_calls
 
         messages.append({
@@ -353,7 +336,6 @@ def run_agent(scenario: dict, progress_callback=None):
                 print(f"   ⚠️  Failed to parse tool arguments for {tool_name}: {e}")
 
             tool_id = tc.id
-
             print(f"   🔧 Tool: {tool_name}({json.dumps(tool_input)[:80]})")
 
             tool_result = execute_tool(tool_name, tool_input, apps)
@@ -380,7 +362,7 @@ def run_agent(scenario: dict, progress_callback=None):
         hit_iteration_limit = True
         print(f"   ⚠️  Hit iteration limit ({max_iterations}) without agent stopping")
 
-    # ── EPISODE COMPLETE ─────────────────────────────────────
+    # ── EPISODE COMPLETE — SCORING ───────────────────────────
     required_set = set(scenario["required_actions"])
     taken_set    = set(taken_actions)
     tools_ok     = required_set.issubset(taken_set)
@@ -421,6 +403,32 @@ def run_agent(scenario: dict, progress_callback=None):
         agent_steps=agent_steps,
     )
 
+    # ── EXTRACT LESSON FROM THIS EPISODE (NEW) ───────────────
+    # Uses Groq to look at what happened and distill a 1-2 sentence
+    # lesson that'll be injected into the system prompt next time.
+    print(f"\n   🎓 Extracting lesson from this episode...")
+    new_lesson = extract_lesson(
+        scenario_name=scenario["name"],
+        agent_prompt=scenario["agent_prompt"],
+        taken_actions=taken_actions,
+        agent_steps=agent_steps,
+        reward_result=reward_result,
+        groq_client=pool.current_client(),
+    )
+    if new_lesson:
+        add_lesson(
+            scenario_id=scenario_id,
+            lesson_text=new_lesson,
+            episode_number=episode["episode_number"],
+            score=reward_result["score"],
+        )
+        print(f"   💡 New lesson saved: {new_lesson[:150]}")
+        reward_result["new_lesson"] = new_lesson
+    else:
+        print(f"   ⚠️  No lesson extracted (extractor returned empty)")
+        reward_result["new_lesson"] = ""
+
+    # ── FINAL LOG ────────────────────────────────────────────
     print(f"\n{'─'*40}")
     print(f"SCORE: {reward_result['score']}  (normalized {reward_result['normalized_score']})")
     print(f"SUCCESS: {task_success}  (tools_ok={tools_ok}, state_ok={state_ok}, finished_cleanly={finished_cleanly})")
