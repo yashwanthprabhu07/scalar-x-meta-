@@ -6,6 +6,8 @@
 #
 # Reliability features:
 #   - Fail-fast on missing GROQ_API_KEY with a clear message
+#   - Two-key automatic failover: on rate-limit errors,
+#     automatically switches to the backup API key
 #   - Retry Groq API calls with exponential backoff (handles
 #     transient 429/500/network errors without killing the demo)
 #   - Per-tool try/except so a single tool failure doesn't crash
@@ -20,12 +22,130 @@ import time
 from groq import Groq                 # Groq — free and fast AI API
 from dotenv import load_dotenv
 
-# Load GROQ_API_KEY from .env file
+# Load GROQ_API_KEY and GROQ_API_KEY_BACKUP from .env file
 load_dotenv()
 
 from mock_apps import EmailApp, ChatApp, CRMApp, TaskApp, CalendarApp
 from tools import ALL_TOOLS
 from reward import calculate_reward, log_episode
+
+
+# ─────────────────────────────────────────────
+# GROQ CLIENT POOL — supports multiple keys with automatic failover
+# ─────────────────────────────────────────────
+class GroqClientPool:
+    """
+    Manages one or more Groq API keys with automatic failover.
+
+    On a rate-limit error (HTTP 429 / RateLimitError), this pool
+    transparently switches to the next available key. Other errors
+    are retried on the same key (transient network/server issues).
+
+    Why this design matters: retrying a rate-limited key just gets
+    rate-limited again. The Step 5 retry logic alone couldn't help
+    when a key was exhausted. Failover is the right fix.
+    """
+
+    def __init__(self, api_keys: list):
+        if not api_keys:
+            raise RuntimeError(
+                "No Groq API keys provided. Set at least GROQ_API_KEY in .env.\n"
+                "Optionally also set GROQ_API_KEY_BACKUP for automatic failover.\n"
+                "Get free keys at https://console.groq.com"
+            )
+        self.api_keys = api_keys
+        self.current_index = 0
+        self.clients = [Groq(api_key=k) for k in api_keys]
+        # Track which keys are known rate-limited so we don't loop back to them
+        self.exhausted = [False] * len(api_keys)
+        print(f"   🔑 Groq client pool initialized with {len(api_keys)} key(s)")
+
+    def _current_client(self):
+        return self.clients[self.current_index]
+
+    def _mark_exhausted_and_rotate(self):
+        """Mark the current key as exhausted and advance to the next live key."""
+        self.exhausted[self.current_index] = True
+        print(f"   🔄 Key #{self.current_index + 1} exhausted, trying next key...")
+
+        for i in range(len(self.clients)):
+            next_idx = (self.current_index + 1 + i) % len(self.clients)
+            if not self.exhausted[next_idx]:
+                self.current_index = next_idx
+                print(f"   ✅ Failed over to key #{self.current_index + 1}")
+                return True
+        # All keys exhausted
+        return False
+
+    def call(self, *, model, max_tokens, tools, tool_choice, messages,
+             max_retries_per_key: int = 3, base_delay: float = 1.0):
+        """
+        Call Groq with automatic failover on rate limits + retry on transient errors.
+
+        Strategy:
+          - On rate-limit / 429 / quota errors: immediately fail over to next key.
+          - On other errors (network, 500, timeout): retry same key with backoff.
+          - If all keys exhausted OR all retries on last key fail: raise.
+        """
+        last_exception = None
+
+        while True:  # loops on key rotation; retries inside
+            client = self._current_client()
+
+            for attempt in range(1, max_retries_per_key + 1):
+                try:
+                    return client.chat.completions.create(
+                        model=model,
+                        max_tokens=max_tokens,
+                        tools=tools,
+                        tool_choice=tool_choice,
+                        messages=messages,
+                    )
+                except Exception as e:
+                    last_exception = e
+                    err_str = str(e).lower()
+                    is_rate_limit = (
+                        "rate_limit" in err_str
+                        or "rate limit" in err_str
+                        or "429" in err_str
+                        or "quota" in err_str
+                        or "tokens per day" in err_str
+                    )
+
+                    if is_rate_limit:
+                        # Don't waste retries on a rate-limited key — fail over now
+                        print(f"   ⚠️  Rate limit hit on key #{self.current_index + 1}: {str(e)[:120]}")
+                        if self._mark_exhausted_and_rotate():
+                            break  # break inner retry loop, outer loop picks new client
+                        else:
+                            print("   ❌ All keys exhausted.")
+                            raise
+
+                    if attempt < max_retries_per_key:
+                        delay = base_delay * (2 ** (attempt - 1))  # 1s, 2s, 4s
+                        print(f"   ⚠️  Groq call failed (attempt {attempt}/{max_retries_per_key}, key #{self.current_index + 1}): "
+                              f"{type(e).__name__}: {str(e)[:120]}")
+                        print(f"      Retrying in {delay}s...")
+                        time.sleep(delay)
+                    else:
+                        print(f"   ❌ Groq call failed after {max_retries_per_key} attempts on key #{self.current_index + 1}: "
+                              f"{type(e).__name__}: {e}")
+                        # Exhausted retries on this key — raise, don't silently fail over
+                        # (because this is NOT a rate limit; it's a real error)
+                        raise
+            # If we got here via `break`, we rotated — continue outer loop to use new client
+
+
+def _load_groq_keys() -> list:
+    """Collect all Groq API keys from the environment (primary + backup)."""
+    keys = []
+    primary = os.getenv("GROQ_API_KEY")
+    if primary:
+        keys.append(primary)
+    backup = os.getenv("GROQ_API_KEY_BACKUP")
+    if backup:
+        keys.append(backup)
+    return keys
 
 
 # ─────────────────────────────────────────────
@@ -43,47 +163,8 @@ def create_fresh_apps():
 
 
 # ─────────────────────────────────────────────
-# GROQ API CALL — with retry and exponential backoff
-# ─────────────────────────────────────────────
-def groq_call_with_retry(client, *, model, max_tokens, tools, tool_choice, messages,
-                         max_retries: int = 3, base_delay: float = 1.0):
-    """
-    Call Groq's chat completions with retry on transient failures.
-
-    Retries on ANY exception (rate limits, 5xx, network blips, timeouts).
-    Uses exponential backoff: 1s, 2s, 4s between retries.
-    Raises the final exception if all retries are exhausted.
-    """
-    last_exception = None
-    for attempt in range(1, max_retries + 1):
-        try:
-            return client.chat.completions.create(
-                model=model,
-                max_tokens=max_tokens,
-                tools=tools,
-                tool_choice=tool_choice,
-                messages=messages,
-            )
-        except Exception as e:
-            last_exception = e
-            if attempt < max_retries:
-                delay = base_delay * (2 ** (attempt - 1))   # 1s, 2s, 4s
-                print(f"   ⚠️  Groq call failed (attempt {attempt}/{max_retries}): {type(e).__name__}: {str(e)[:120]}")
-                print(f"      Retrying in {delay}s...")
-                time.sleep(delay)
-            else:
-                print(f"   ❌ Groq call failed after {max_retries} attempts: {type(e).__name__}: {e}")
-
-    # Exhausted retries — re-raise the last exception
-    raise last_exception
-
-
-# ─────────────────────────────────────────────
 # TOOL DISPATCH TABLE
 # Maps tool_name → lambda(tool_input, apps) → dict result
-# This is cleaner than a long if/elif chain and trivially extensible:
-# to add a new tool, register it in ALL_TOOLS (tools.py) and add a
-# line to this dict. That's it.
 # ─────────────────────────────────────────────
 TOOL_DISPATCH = {
     # ── Email ─────────────────────────────────────────────
@@ -131,13 +212,7 @@ TOOL_DISPATCH = {
 def execute_tool(tool_name: str, tool_input: dict, apps: dict) -> str:
     """
     Dispatches a tool call to the right app method and returns the result as JSON.
-
-    Wraps execution in try/except so that:
-      - an unknown tool is reported cleanly (not a KeyError crash)
-      - a missing argument is reported cleanly (not a KeyError crash)
-      - any other app-level exception is returned to the agent as a tool
-        result, so the agent can see the error and recover instead of
-        killing the whole episode.
+    Wraps execution in try/except so errors become tool results the agent can see.
     """
     handler = TOOL_DISPATCH.get(tool_name)
     if handler is None:
@@ -171,15 +246,17 @@ def run_agent(scenario: dict, progress_callback=None):
     # Fresh apps for this episode
     apps = create_fresh_apps()
 
-    # ── GROQ CLIENT ──────────────────────────────────────────
-    api_key = os.getenv("GROQ_API_KEY")
-    if not api_key:
+    # ── GROQ CLIENT POOL (supports primary + backup key failover) ──
+    keys = _load_groq_keys()
+    if not keys:
         raise RuntimeError(
-            "GROQ_API_KEY is not set. Create a .env file in the project root "
-            "with a line like:  GROQ_API_KEY=your_key_here\n"
-            "You can get a free key at https://console.groq.com"
+            "GROQ_API_KEY is not set. Create a .env file in the project root with:\n"
+            "  GROQ_API_KEY=your_key_here\n"
+            "Optionally also add a backup for automatic failover:\n"
+            "  GROQ_API_KEY_BACKUP=your_second_key_here\n"
+            "Get free keys at https://console.groq.com"
         )
-    client = Groq(api_key=api_key)
+    pool = GroqClientPool(keys)
 
     # Track what the agent does
     agent_steps   = []   # Full step details
@@ -229,10 +306,8 @@ def run_agent(scenario: dict, progress_callback=None):
     for iteration in range(1, max_iterations + 1):
         print(f"[Iteration {iteration}] Asking Groq what to do next...")
 
-        # Ask Groq what to do (it will either call a tool or say it's done).
-        # Uses retry-with-backoff so a transient API error doesn't kill the run.
-        response = groq_call_with_retry(
-            client,
+        # Call Groq with automatic failover + retry
+        response = pool.call(
             model="llama-3.3-70b-versatile",     # Best free Groq model for tool use
             max_tokens=4096,
             tools=grok_tools,
@@ -251,9 +326,8 @@ def run_agent(scenario: dict, progress_callback=None):
             break
 
         # ── PROCESS TOOL CALLS ───────────────────────────────
-        tool_calls = message.tool_calls   # List of tool calls Groq wants to make
+        tool_calls = message.tool_calls
 
-        # Add Groq's response (with tool calls) to conversation history
         messages.append({
             "role": "assistant",
             "content": message.content,
@@ -270,24 +344,21 @@ def run_agent(scenario: dict, progress_callback=None):
             ]
         })
 
-        # Run each tool call and collect results
         for tc in tool_calls:
-            tool_name  = tc.function.name
+            tool_name = tc.function.name
             try:
                 tool_input = json.loads(tc.function.arguments)
             except json.JSONDecodeError as e:
                 tool_input = {}
                 print(f"   ⚠️  Failed to parse tool arguments for {tool_name}: {e}")
 
-            tool_id    = tc.id
+            tool_id = tc.id
 
             print(f"   🔧 Tool: {tool_name}({json.dumps(tool_input)[:80]})")
 
-            # Actually run the tool on our mock apps (dispatches via TOOL_DISPATCH)
             tool_result = execute_tool(tool_name, tool_input, apps)
             print(f"   📦 Result: {tool_result[:100]}...")
 
-            # Track this step
             step = {
                 "iteration":   iteration,
                 "tool_name":   tool_name,
@@ -297,29 +368,23 @@ def run_agent(scenario: dict, progress_callback=None):
             agent_steps.append(step)
             taken_actions.append(tool_name)
 
-            # Send step to Streamlit dashboard (live feed)
             if progress_callback:
                 progress_callback(step)
 
-            # Add tool result back into conversation so Groq can see what happened
             messages.append({
                 "role": "tool",
                 "tool_call_id": tool_id,
                 "content": tool_result,
             })
     else:
-        # The `for/else` runs when the loop exits WITHOUT `break`
-        # → means we hit max_iterations without the agent saying it was done
         hit_iteration_limit = True
         print(f"   ⚠️  Hit iteration limit ({max_iterations}) without agent stopping")
 
     # ── EPISODE COMPLETE ─────────────────────────────────────
-    # Check 1: were all required tools called?
     required_set = set(scenario["required_actions"])
     taken_set    = set(taken_actions)
     tools_ok     = required_set.issubset(taken_set)
 
-    # Check 2: does the final app state match expectations? (state-based check)
     state_ok = True
     state_reasons = ["(no state check defined for this scenario)"]
     if "success_check" in scenario and callable(scenario["success_check"]):
@@ -329,26 +394,20 @@ def run_agent(scenario: dict, progress_callback=None):
             state_ok = False
             state_reasons = [f"❌ State check raised an exception: {str(e)}"]
 
-    # Check 3: did the agent actually finish (not hit the iteration limit)?
     finished_cleanly = not hit_iteration_limit
-
-    # Overall success = all three must pass
     task_success = tools_ok and state_ok and finished_cleanly
 
-    # Score the episode
     reward_result = calculate_reward(
         required_actions=scenario["required_actions"],
         taken_actions=taken_actions,
         task_success=task_success,
     )
 
-    # Attach the state-check details to the reward result (for the dashboard)
     reward_result["state_check_passed"]  = state_ok
     reward_result["state_check_reasons"] = state_reasons
     reward_result["tools_check_passed"]  = tools_ok
     reward_result["finished_cleanly"]    = finished_cleanly
 
-    # Add state-check info into the breakdown so it shows in the UI
     reward_result["breakdown"].append("")
     reward_result["breakdown"].append("── State check ──")
     for line in state_reasons:
@@ -356,7 +415,6 @@ def run_agent(scenario: dict, progress_callback=None):
     if not finished_cleanly:
         reward_result["breakdown"].append("⚠️  Agent hit the iteration limit without stopping cleanly")
 
-    # Save to history
     episode = log_episode(
         scenario_id=scenario["id"],
         reward_result=reward_result,
