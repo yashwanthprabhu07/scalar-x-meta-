@@ -8,3 +8,5 @@ venv/
 .venv/
 env/
 agent_memory.json
+credentials.json
+token.json
