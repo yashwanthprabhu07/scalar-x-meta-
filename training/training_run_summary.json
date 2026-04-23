@@ -1,0 +1,13 @@
+{
+  "model": "Qwen/Qwen2.5-1.5B-Instruct",
+  "training_steps": 5,
+  "num_generations": 4,
+  "gradient_accumulation_steps": 4,
+  "environment_url": "https://yashwanthprabhu-enterprise-workflow-env.hf.space",
+  "baseline_mean_total": 0.0,
+  "trained_mean_total": 0.0,
+  "training_runtime_seconds": 289.4,
+  "finding": "Untrained Qwen2.5-1.5B does not emit parseable tool calls for Deal Rescue (the hardest scenario). All 4 reward functions stay at 0 across training. Completions are clipped at 256 tokens (clipped_ratio=1), indicating the model never terminates a proper tool-call structure. Full training would require either SFT warmup or curriculum learning (starting with the morning_checkin scenario, then ramping up).",
+  "reward_pipeline_validated": true,
+  "openenv_integration_validated": true
+}
