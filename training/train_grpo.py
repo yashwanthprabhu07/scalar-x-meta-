@@ -1,35 +1,24 @@
 # ============================================================
-# training/train_grpo.py — GRPO training against the OpenEnv Space
+# training/train_grpo.py — GRPO training with multiple reward functions
 #
-# This script (or Colab notebook) fine-tunes a small LLM using
-# GRPO (Group Relative Policy Optimization) against our live
-# Enterprise Workflow OpenEnv environment hosted on HF Spaces.
-#
-# What it demonstrates:
-#   - End-to-end RL training pipeline on a real agentic task
-#   - Reward shaping from the OpenEnv reward function
-#   - A genuine reward curve showing improvement
-#
-# Designed for Colab free tier (T4 GPU, 16GB VRAM) but runs
-# anywhere with a CUDA GPU.
+# Updated to use 4 independent reward functions instead of 1 scalar,
+# per the hackathon build guide recommendation (Section 7).
 #
 # ── How to use ───────────────────────────────────────────────
-# Local test (no training, just validate pipeline):
+# Local smoke test (no training, just validate pipeline):
 #   python training/train_grpo.py --dry-run
 #
-# Local training (requires CUDA GPU):
+# Real training (requires CUDA GPU):
 #   python training/train_grpo.py
 #
-# In Colab:
-#   paste each "# CELL N" block as a separate cell
+# In Colab: paste CELL N blocks as separate cells.
 # ============================================================
 
 # ═══════════════════════════════════════════════════════════
-# CELL 1 — INSTALL DEPS
+# CELL 1 — INSTALL DEPS (uncomment in Colab)
 # ═══════════════════════════════════════════════════════════
-# (In Colab, run this as the first cell)
 # !pip install -q openenv-core trl transformers peft accelerate
-# !pip install -q unsloth  # optional — faster training, but optional
+# !pip install -q unsloth  # optional — faster training
 
 # ═══════════════════════════════════════════════════════════
 # CELL 2 — IMPORTS AND CONFIG
@@ -40,25 +29,21 @@ import sys
 from typing import Any, Dict, List, Optional
 
 # ── Environment config ──
-# This is YOUR live Space URL. Change if you redeploy under a different name.
 ENV_SPACE_URL = "https://yashwanthprabhu-enterprise-workflow-env.hf.space"
 
-# ── Model config ──
-MODEL_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
-# Training hyperparameters are kept small so this finishes on free-tier Colab
-# in ~10-15 minutes. For real training, scale these up.
-NUM_TRAIN_STEPS   = 5       # number of GRPO optimization steps
-NUM_GENERATIONS   = 4       # rollouts per prompt (GRPO needs >= 2)
-MAX_EPISODE_STEPS = 15      # safety cap on tool calls per rollout
+# ── Model / training config ──
+MODEL_NAME        = "Qwen/Qwen2.5-1.5B-Instruct"
+NUM_TRAIN_STEPS   = 5
+NUM_GENERATIONS   = 4
+MAX_EPISODE_STEPS = 15
 LEARNING_RATE     = 1e-5
-BATCH_SIZE        = 1       # 1 prompt per step × NUM_GENERATIONS rollouts each
+BATCH_SIZE        = 1
 
 
 # ═══════════════════════════════════════════════════════════
 # CELL 3 — IMPORT THE ROLLOUT HELPER
 # ═══════════════════════════════════════════════════════════
-# In Colab we need to clone the repo first to get rollout.py.
-# Uncomment these in Colab:
+# In Colab, uncomment these:
 # !git clone https://github.com/yashwanthprabhu07/scalar-x-meta-.git
 # %cd scalar-x-meta-
 # !git checkout hackathon-polish
@@ -66,7 +51,6 @@ BATCH_SIZE        = 1       # 1 prompt per step × NUM_GENERATIONS rollouts each
 # sys.path.insert(0, "openenv")
 # sys.path.insert(0, "training")
 
-# Locally we're already in the project — fix up paths so rollout.py works
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd()
 _PROJECT  = os.path.dirname(_THIS_DIR) if _THIS_DIR.endswith("training") else _THIS_DIR
 for p in (_PROJECT, os.path.join(_PROJECT, "openenv"), os.path.join(_PROJECT, "training")):
@@ -77,18 +61,8 @@ from rollout import run_episode, AgentFn
 
 
 # ═══════════════════════════════════════════════════════════
-# CELL 4 — BASELINE AGENT (GROQ or a scripted baseline)
+# CELL 4 — BASELINE / SCRIPTED AGENT FOR TESTING
 # ═══════════════════════════════════════════════════════════
-# Before training, we establish a baseline reward by running our
-# existing Groq-powered agent a few times against the Space and
-# averaging the rewards.
-#
-# For Colab, we swap this for the HF model's initial behavior.
-# For local dry-run, we just use a scripted agent.
-#
-# Each function below implements the AgentFn signature:
-#   (system_prompt, conversation, tool_schemas) -> {tool_name, tool_args} | None
-
 def make_deal_rescue_scripted_agent() -> AgentFn:
     """Scripted perfect-play agent for smoke testing."""
     script = [
@@ -126,15 +100,8 @@ def make_deal_rescue_scripted_agent() -> AgentFn:
 # ═══════════════════════════════════════════════════════════
 # CELL 5 — MODEL-BACKED AGENT
 # ═══════════════════════════════════════════════════════════
-# This is the agent that TRL will be training. It takes the current
-# conversation and uses the model's chat template (which supports
-# tool calling) to pick the next action.
-#
-# In Colab this loads Qwen2.5-1.5B. Locally it's skipped unless we
-# have a GPU (it's a 3GB download).
-
 def load_model_and_tokenizer(model_name: str):
-    """Lazy import so local dry-runs don't require transformers."""
+    """Lazy import — local dry-runs don't require transformers."""
     from transformers import AutoModelForCausalLM, AutoTokenizer
     import torch
 
@@ -149,17 +116,15 @@ def load_model_and_tokenizer(model_name: str):
 
 def make_model_agent(model, tokenizer, max_new_tokens: int = 200) -> AgentFn:
     """
-    Returns an AgentFn that uses the given HF model to pick the next tool call.
-    Uses Qwen's built-in chat-template tool-calling format.
+    AgentFn that uses the HF model's chat template (with tools) to pick
+    the next tool call. Uses Qwen's built-in tool-calling format.
     """
     import torch
 
     def _agent(system_prompt, conversation, tool_schemas):
-        # Build messages in the format Qwen expects
         messages = [{"role": "system", "content": system_prompt}]
         messages.extend(conversation)
 
-        # Apply the chat template with tools
         inputs = tokenizer.apply_chat_template(
             messages,
             tools=tool_schemas,
@@ -167,7 +132,6 @@ def make_model_agent(model, tokenizer, max_new_tokens: int = 200) -> AgentFn:
             return_tensors="pt",
         ).to(model.device)
 
-        # Generate a completion
         with torch.no_grad():
             output_ids = model.generate(
                 inputs,
@@ -180,10 +144,7 @@ def make_model_agent(model, tokenizer, max_new_tokens: int = 200) -> AgentFn:
         new_tokens = output_ids[0][inputs.shape[1]:]
         response = tokenizer.decode(new_tokens, skip_special_tokens=False)
 
-        # Extract the tool call from the response
-        # Qwen emits: <tool_call>\n{"name": "x", "arguments": {...}}\n</tool_call>
-        parsed = _parse_qwen_tool_call(response)
-        return parsed
+        return _parse_qwen_tool_call(response)
 
     return _agent
 
@@ -193,7 +154,6 @@ def _parse_qwen_tool_call(response: str) -> Optional[Dict]:
     import re
     match = re.search(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", response, re.DOTALL)
     if not match:
-        # Model didn't emit a tool call — treat as 'done'
         return None
     try:
         parsed = json.loads(match.group(1))
@@ -206,94 +166,123 @@ def _parse_qwen_tool_call(response: str) -> Optional[Dict]:
 
 
 # ═══════════════════════════════════════════════════════════
-# CELL 6 — REWARD FUNCTION FOR TRL
+# CELL 6 — MULTI-FUNCTION REWARDS (build-guide aligned)
 # ═══════════════════════════════════════════════════════════
-# TRL's GRPOTrainer expects a reward function of signature:
-#   def reward_fn(prompts, completions, **kwargs) -> List[float]
+# Per the hackathon build guide (Section 7):
+#   "use multiple independent reward functions, not just one.
+#    If you only have a single reward signal, it is easier
+#    for the model to hack it."
 #
-# For OpenEnv-based training, the "completion" isn't a single string —
-# it's a whole trajectory of tool calls. So we need to:
-#   1. Have the model roll out a trajectory against the env for each prompt
-#   2. Return the final episode reward from the env
-#
-# (The model object is captured in the closure.)
+# TRL's GRPOTrainer accepts `reward_funcs=[fn1, fn2, ...]` and
+# tracks each separately in metrics. Each reward function follows
+# the same signature and extracts one axis of the trajectory score.
 
-def make_openenv_reward_fn(model, tokenizer, env_url: str = ENV_SPACE_URL):
+def _run_rollouts_for_prompts(prompts, model, tokenizer, env_url: str) -> List[Dict]:
+    """Run one rollout per prompt. Returns trajectory dicts."""
+    agent = make_model_agent(model, tokenizer)
+    trajectories = []
+    for _ in range(len(prompts)):
+        try:
+            result = run_episode(
+                agent_fn=agent,
+                base_url=env_url,
+                max_steps=MAX_EPISODE_STEPS,
+                verbose=False,
+            )
+            trajectories.append(result)
+        except Exception as e:
+            print(f"   ⚠️  rollout failed: {e}")
+            trajectories.append({
+                "required_actions": [],
+                "taken_actions": [],
+                "task_success": False,
+                "steps": [],
+                "final_reward": -10.0,
+            })
+    return trajectories
+
+
+def make_multi_reward_fns(model, tokenizer, env_url: str = ENV_SPACE_URL):
     """
-    Factory: returns a callable suitable for TRL's GRPOTrainer.
+    Returns a list of 4 reward functions for TRL's GRPOTrainer.
 
-    When called, it runs one episode per prompt against the live
-    OpenEnv server and returns the final reward.
+    Each function re-runs rollouts per prompt (TRL calls each reward
+    function separately). For our small training (5 steps × 4 gens),
+    the cost is acceptable. Production code would cache.
     """
-    def _reward_fn(prompts: List[str], completions: List[str], **kwargs) -> List[float]:
-        rewards = []
-        agent = make_model_agent(model, tokenizer)
-        for _ in range(len(prompts)):
-            try:
-                result = run_episode(
-                    agent_fn=agent,
-                    base_url=env_url,
-                    max_steps=MAX_EPISODE_STEPS,
-                    verbose=False,
-                )
-                rewards.append(float(result["final_reward"]))
-            except Exception as e:
-                print(f"   ⚠️  rollout failed: {e}")
-                rewards.append(-10.0)  # failure sentinel
-        return rewards
+    from reward_funcs import (
+        tool_correctness_reward,
+        tool_efficiency_reward,
+        task_completion_reward,
+        format_validity_reward,
+    )
 
-    return _reward_fn
+    def _make_axis_fn(axis_name: str, score_fn):
+        def _reward_fn(prompts, completions, **kwargs):
+            trajectories = _run_rollouts_for_prompts(prompts, model, tokenizer, env_url)
+            return [float(score_fn(t)) for t in trajectories]
+        _reward_fn.__name__ = f"reward_{axis_name}"
+        return _reward_fn
+
+    return [
+        _make_axis_fn("tool_correctness", tool_correctness_reward),
+        _make_axis_fn("tool_efficiency",  tool_efficiency_reward),
+        _make_axis_fn("task_completion",  task_completion_reward),
+        _make_axis_fn("format_validity",  format_validity_reward),
+    ]
 
 
 # ═══════════════════════════════════════════════════════════
-# CELL 7 — EVAL LOOP (runs N episodes, reports stats)
+# CELL 7 — EVAL LOOP
 # ═══════════════════════════════════════════════════════════
 def eval_agent(agent_fn: AgentFn, env_url: str, num_episodes: int = 3,
                label: str = "agent", verbose: bool = True) -> Dict:
-    """Run `num_episodes` episodes; return mean reward + success rate."""
-    rewards = []
-    successes = []
+    """Run `num_episodes` episodes; report mean reward + success rate."""
+    from reward_funcs import score_trajectory
+
+    results = []
     for i in range(num_episodes):
-        # Re-create a fresh scripted-copy if needed; for model-backed it's stateless
         result = run_episode(
-            agent_fn=agent_fn if not hasattr(agent_fn, "_needs_reset") else agent_fn(),
+            agent_fn=agent_fn,
             base_url=env_url,
             max_steps=MAX_EPISODE_STEPS,
             verbose=False,
         )
-        rewards.append(result["final_reward"])
-        successes.append(bool(result.get("task_success")))
+        scored = score_trajectory(result)
+        results.append(scored)
         if verbose:
-            print(f"   [{label} ep {i+1}] reward={result['final_reward']:.1f}, success={result.get('task_success')}")
+            print(f"   [{label} ep {i+1}] total={scored['total']:+.1f}  "
+                  f"(correct={scored['tool_correctness']:+.0f}, "
+                  f"eff={scored['tool_efficiency']:+.1f}, "
+                  f"done={scored['task_completion']:+.0f}, "
+                  f"fmt={scored['format_validity']:+.0f})")
 
-    mean_reward = sum(rewards) / max(len(rewards), 1)
-    success_rate = sum(successes) / max(len(successes), 1)
-    print(f"── {label}: mean_reward={mean_reward:.2f}, success_rate={success_rate:.2%}")
+    mean_total = sum(r["total"] for r in results) / max(len(results), 1)
+    mean_completion = sum(r["task_completion"] for r in results) / max(len(results), 1)
+    print(f"── {label}: mean_total={mean_total:+.2f}, "
+          f"mean_completion={mean_completion:+.2f}")
     return {
-        "mean_reward": mean_reward,
-        "success_rate": success_rate,
-        "rewards": rewards,
+        "mean_total": mean_total,
+        "mean_completion": mean_completion,
+        "per_episode": results,
     }
 
 
 # ═══════════════════════════════════════════════════════════
-# CELL 8 — GRPO TRAINING LOOP (the main event)
+# CELL 8 — GRPO TRAINING LOOP
 # ═══════════════════════════════════════════════════════════
 def train_grpo():
-    """Run a short GRPO training run against the live OpenEnv Space."""
+    """Run a short GRPO training run with 4 independent reward funcs."""
     from trl import GRPOConfig, GRPOTrainer
 
     print("── Loading model:", MODEL_NAME)
     model, tokenizer = load_model_and_tokenizer(MODEL_NAME)
-    print(f"   Model loaded. Parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"   Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
-    # BASELINE — before training, see how the model does cold
     print("\n── Baseline evaluation (pre-training) ──")
     baseline_agent = make_model_agent(model, tokenizer)
     baseline_stats = eval_agent(baseline_agent, ENV_SPACE_URL, num_episodes=2, label="baseline")
 
-    # Build the dataset — just repeated copies of the scenario prompt.
-    # TRL will sample NUM_GENERATIONS rollouts per prompt.
     scenario_prompt = (
         "You are an AI sales assistant. Acme Corp emailed to cancel their $50,000 "
         "contract. Use the available tools to read their email, look up the deal, "
@@ -302,9 +291,11 @@ def train_grpo():
     )
     dataset = [{"prompt": scenario_prompt} for _ in range(NUM_TRAIN_STEPS * BATCH_SIZE)]
 
-    reward_fn = make_openenv_reward_fn(model, tokenizer, env_url=ENV_SPACE_URL)
+    reward_fns = make_multi_reward_fns(model, tokenizer, env_url=ENV_SPACE_URL)
+    print(f"\n── Using {len(reward_fns)} independent reward functions ──")
+    for fn in reward_fns:
+        print(f"   • {fn.__name__}")
 
-    # GRPO config — tiny run for demo
     config = GRPOConfig(
         output_dir="./grpo_output",
         per_device_train_batch_size=BATCH_SIZE,
@@ -315,7 +306,7 @@ def train_grpo():
         num_train_epochs=1,
         max_steps=NUM_TRAIN_STEPS,
         logging_steps=1,
-        save_steps=NUM_TRAIN_STEPS,  # save only at end
+        save_steps=NUM_TRAIN_STEPS,
         gradient_accumulation_steps=1,
         bf16=True,
     )
@@ -323,43 +314,49 @@ def train_grpo():
     trainer = GRPOTrainer(
         model=model,
         args=config,
-        reward_funcs=[reward_fn],
+        reward_funcs=reward_fns,
         train_dataset=dataset,
         processing_class=tokenizer,
     )
 
-    print(f"\n── Starting GRPO training ({NUM_TRAIN_STEPS} steps, {NUM_GENERATIONS} generations/step) ──")
+    print(f"\n── Starting GRPO training ({NUM_TRAIN_STEPS} steps, {NUM_GENERATIONS} gens/step) ──")
     trainer.train()
     print("── Training complete ──")
 
-    # POST-TRAINING EVALUATION
     print("\n── Post-training evaluation ──")
     trained_agent = make_model_agent(model, tokenizer)
     trained_stats = eval_agent(trained_agent, ENV_SPACE_URL, num_episodes=2, label="trained")
 
     print("\n══════════════════════════════════════")
-    print(f"BASELINE:   mean_reward={baseline_stats['mean_reward']:.2f}, success_rate={baseline_stats['success_rate']:.2%}")
-    print(f"TRAINED:    mean_reward={trained_stats['mean_reward']:.2f}, success_rate={trained_stats['success_rate']:.2%}")
-    print(f"Δ reward:   {trained_stats['mean_reward'] - baseline_stats['mean_reward']:+.2f}")
+    print(f"BASELINE:  mean_total={baseline_stats['mean_total']:+.2f}  completion={baseline_stats['mean_completion']:+.2f}")
+    print(f"TRAINED:   mean_total={trained_stats['mean_total']:+.2f}  completion={trained_stats['mean_completion']:+.2f}")
+    print(f"Δ total:   {trained_stats['mean_total'] - baseline_stats['mean_total']:+.2f}")
     print("══════════════════════════════════════")
 
     return baseline_stats, trained_stats
 
 
 # ═══════════════════════════════════════════════════════════
-# CELL 9 — DRY RUN (for local testing; no GPU needed)
+# CELL 9 — DRY RUN (no GPU needed)
 # ═══════════════════════════════════════════════════════════
 def dry_run():
-    """
-    Validate the pipeline without training.
-    Runs a scripted agent against the live Space to confirm reachability.
-    """
-    print("Dry run: scripted agent → live Space")
+    """Validate the pipeline without training. Uses scripted agent."""
+    print("Dry run: scripted agent → live Space, multi-reward scoring\n")
+
+    from reward_funcs import score_trajectory
+
     agent = make_deal_rescue_scripted_agent()
     result = run_episode(agent_fn=agent, base_url=ENV_SPACE_URL,
                          max_steps=15, verbose=True)
-    print(f"\n→ Final reward: {result['final_reward']}")
-    print(f"→ Task success: {result['task_success']}")
+
+    scored = score_trajectory(result)
+    print("\n── Multi-reward scoring ──")
+    for line in scored["breakdown"]:
+        print(f"  {line}")
+    print(f"  {'═' * 40}")
+    print(f"  Total:              {scored['total']:+.1f}")
+    print(f"\nEnv final_reward:   {result['final_reward']}")
+    print(f"Task success:       {result['task_success']}")
 
 
 # ═══════════════════════════════════════════════════════════
@@ -368,8 +365,7 @@ def dry_run():
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Run pipeline smoke test without training")
+    parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     if args.dry_run:
