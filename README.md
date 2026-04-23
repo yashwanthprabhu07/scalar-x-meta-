@@ -1,226 +1,270 @@
-<!-- @format -->
+# AI Enterprise Workflow Environment
 
-# AI Enterprise Workflow Simulator
+> An **OpenEnv-compliant environment** for training LLM agents on long-horizon, multi-app enterprise workflows. Built for the **Meta PyTorch OpenEnv × Scaler School of Technology Hackathon** (April 2026).
 
-> An **OpenEnv-compatible evaluation harness and baseline agent** for long-horizon, multi-app enterprise workflows. Built for the **Scaler × Meta PyTorch OpenEnv Hackathon** (April 2026).
+**Theme #3.1 — World Modeling / Professional Tasks**
+
+**[Try the live environment →](https://huggingface.co/spaces/yashwanthprabhu/enterprise-workflow-env)**
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![Streamlit](https://img.shields.io/badge/dashboard-Streamlit-ff4b4b.svg)](https://streamlit.io/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](#license)
+[![OpenEnv 0.2.3](https://img.shields.io/badge/OpenEnv-0.2.3-green.svg)](https://github.com/meta-pytorch/OpenEnv)
+[![TRL](https://img.shields.io/badge/TRL-GRPO-purple.svg)](https://huggingface.co/docs/trl)
+[![HF Spaces](https://img.shields.io/badge/deployed-HF%20Spaces-yellow.svg)](https://huggingface.co/spaces/yashwanthprabhu/enterprise-workflow-env)
 
 ---
 
-## What this project is
+## The problem
 
-Modern AI agents are expected to handle **long-horizon, multi-app workflows** — the kind a human employee does every day: read an email, update a CRM deal, book a meeting, post a Slack message, coordinate across five different tools to resolve one real-world situation.
+Modern AI agents are increasingly expected to handle **cross-app enterprise workflows** — the kind a human employee does every day: read an email, check a CRM deal, reply with a tailored offer, book a meeting, post a Slack update. These workflows require long-horizon planning, real-world state awareness, and integration with multiple SaaS tools.
 
-Evaluating such agents is harder than evaluating chat responses. You can't just grade text output — you have to grade **outcomes**: did the deal actually get updated? Did the meeting actually get booked with the right people?
+Training agents for this is hard. You cannot grade text output alone — you must grade **outcomes**: did the deal actually get updated in CRM? Did the meeting actually appear on the calendar? Did the reply go to the right person?
 
-This project provides:
+This project builds the infrastructure to train and evaluate such agents:
 
-1. **A simulated enterprise environment** — 5 mock SaaS apps (Email, Chat, CRM, Tasks, Calendar) with 20 tools the agent can call.
-2. **3 realistic long-horizon scenarios** — each requires 6–8 coordinated tool calls across multiple apps to succeed.
-3. **A rigorous dual reward signal** — both _tool-call_ checks (did it use the right tools?) and _state-based_ checks (did the mock apps actually end up in the correct state?).
-4. **A baseline tool-calling agent** (currently Llama-3.3-70B via Groq) plus a pluggable `AgentInterface` so any policy — including a PyTorch policy trained with OpenEnv — can be dropped in and scored the same way.
-5. **A live dashboard** that streams agent actions in real time and plots reward over episodes.
-
-> **Positioning note:** the repo ships a working baseline agent, but the real contribution is the **environment + reward + eval harness**. The agent is the easiest part to swap.
+1. **An OpenEnv-compliant environment** modeling 5 mock SaaS apps with 20 tools.
+2. **4 scenarios** ranging from easy curriculum tasks to 8-tool long-horizon coordination.
+3. **4 independent reward functions** — hack-resistant by design.
+4. **A real Google Calendar integration** — the agent can book actual meetings, not just simulated ones.
+5. **A complete TRL training pipeline** ready for GRPO on the live environment.
 
 ---
 
-## Why it maps to the hackathon themes
+## Live environment
 
-| Theme                        | How this project addresses it                                                                                                                                                                                                    |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Long-Horizon Planning**    | Each scenario requires 6–8 interdependent tool calls across 5 apps. Success needs a plan, not a reflex.                                                                                                                          |
-| **World Modeling**           | The agent must read state (inbox, channel, tasks) before acting. State-based checks verify the world was actually changed, not just that tools were invoked.                                                                     |
-| **Self-Improving Agent**     | Between-episode memory: after each run, the agent distills lessons from its trajectory + reward and carries them into future episodes. The Self-Improvement Graph shows reward rising across repeated runs of the same scenario. |
-| **Multi-Agent Interactions** | (Stretch) The environment supports multiple agents posting into shared chat channels and sharing task state; the baseline is single-agent but the substrate is multi-agent ready.                                                |
+- **Space page:** https://huggingface.co/spaces/yashwanthprabhu/enterprise-workflow-env
+- **Server endpoint:** https://yashwanthprabhu-enterprise-workflow-env.hf.space
+- **Interactive Playground:** click Reset / Step / Get state in the Space UI to drive episodes by hand.
 
----
-
-## Demo screenshots
-
-_Add your own screenshots here after recording the demo video:_
-
-- Sidebar with scenario selection and reward rules
-- Live agent feed streaming tool calls in real time
-- Reward breakdown with both tool-call and state-based checks
-- Self-improvement graph showing score rising over episodes
-
----
-
-## Architecture
-
-```
-┌──────────────────────────────────────────────────────────┐
-│                    Streamlit Dashboard                    │
-│        (dashboard.py — live feed + reward graph)          │
-└────────────────────────┬─────────────────────────────────┘
-                         │ progress callback
-                         ▼
-┌──────────────────────────────────────────────────────────┐
-│                    Agent Loop  (agent.py)                 │
-│   - Calls LLM via AgentInterface (pluggable backend)      │
-│   - Dispatches tools via TOOL_DISPATCH table              │
-│   - Retry-with-backoff on transient API errors            │
-└───┬─────────────────────┬────────────────────┬───────────┘
-    │                     │                    │
-    ▼                     ▼                    ▼
-┌──────────┐      ┌──────────────┐     ┌────────────────┐
-│  Tools   │      │  Mock Apps   │     │     Reward     │
-│(tools.py)│      │(mock_apps.py)│     │  (reward.py)   │
-│          │      │              │     │                │
-│ 20 tools │      │ Email, Chat, │     │ +10 success    │
-│ schemas  │      │ CRM, Tasks,  │     │ +2 per correct │
-│          │      │ Calendar     │     │ -1 per extra   │
-│          │      │              │     │ -5 per missed  │
-└──────────┘      └──────────────┘     │ + state checks │
-                                        └────────────────┘
-                         ▲
-                         │
-                  ┌──────┴──────┐
-                  │  Scenarios  │
-                  │(scenarios.py)│
-                  │             │
-                  │ 3 tasks +   │
-                  │ state-based │
-                  │ success     │
-                  │ checks      │
-                  └─────────────┘
-```
-
-### File map
-
-| File           | Purpose                                                                               |
-| -------------- | ------------------------------------------------------------------------------------- |
-| `agent.py`     | The agent loop. Calls the LLM, dispatches tools, scores the episode.                  |
-| `mock_apps.py` | The 5 simulated SaaS apps (Email, Chat, CRM, Tasks, Calendar).                        |
-| `tools.py`     | JSON-schema definitions for all 20 tools exposed to the LLM.                          |
-| `scenarios.py` | The 3 scenarios, each with a prompt, required tools, and a state-based success check. |
-| `reward.py`    | The dual reward function + episode history logger.                                    |
-| `dashboard.py` | The Streamlit dashboard (live feed, reward graph, episode history).                   |
-
----
-
-## The 3 scenarios
-
-### 🔥 Deal Rescue
-
-A key client (Acme Corp, $50K/year) emails to cancel their contract. The agent must: read the email, look up the deal in CRM, reply with a discount offer, update the deal stage, add a note, book a follow-up call, and post to the sales channel. **8 required tool calls.**
-
-### ⚔️ Team Conflict
-
-Two engineers — Arjun and Sneha — both claim ownership of the same task. The agent must: read the engineering channel, inspect the conflicting task, list all tasks to find an alternative, **reassign** TASK-003 to Sneha and **reassign** TASK-004 to Arjun (the state check specifically catches agents that `create_task` instead of `assign_task` — a common LLM mistake), post a resolution, and book a sync meeting. **6 required tool calls.**
-
-### 🚀 Client Onboarding
-
-A new client (Priya Sharma, NewClient Inc) emails interest in the enterprise plan. The agent must: read the inbox (and correctly pick out Priya's email from among several), read the full message, create a CRM contact, reply with a welcome, create two onboarding tasks (one each for Arjun and Sneha), book a kickoff meeting, and announce it in the general channel. **7 required tool calls.**
-
----
-
-## The reward function
-
-The reward function has **two independent layers**:
-
-**Layer 1 — Tool-call scoring** (what tools were called):
-
-- `+10` if the task is fully completed
-- `-10` if the task failed
-- `+2` for each distinct required tool called correctly
-- `-5` for each required tool that was missed
-- `-1` for each extra call (duplicates of required tools beyond the first, or calls to non-required tools)
-
-**Layer 2 — State-based verification** (what actually happened):
-Each scenario defines a `success_check(apps)` that inspects the final state of the mock apps and returns a list of ✅/❌ outcomes. For example, Deal Rescue verifies that the Acme deal's stage actually changed, a new note was added, a new meeting exists, a reply was sent, and a message was posted.
-
-**Overall success = all required tools called AND all state checks passed AND the agent didn't hit the iteration limit.** All three gates must pass.
-
-This dual signal prevents agents from gaming the reward by, for example, calling `book_meeting` with garbage arguments — the tool call counts, but the state check catches that no valid meeting exists.
-
----
-
-## Self-improving agent (Path B)
-
-After each episode, the agent extracts a short "lesson learned" from its trajectory and final reward. On the next episode of the same scenario, the agent receives those lessons in its system prompt, allowing it to avoid past mistakes without any model retraining.
-
-This is _prompt-level_ self-improvement — not reinforcement learning — but the **reward signal it uses is the same one a PyTorch policy would use**. When the environment is later plugged into OpenEnv, the existing reward function works unchanged.
-
-Running the same scenario multiple times shows a visible upward trend in the Self-Improvement Graph.
-
----
-
-## Pluggable agent backend (`agent_interface.py`)
-
-The current baseline uses Llama-3.3-70B via the Groq API. The agent is decoupled from the environment through a small interface:
+Python client example:
 
 ```python
-class AgentInterface:
-    def act(self, messages: list, tools: list) -> AgentResponse:
-        """
-        Given the conversation history and available tools,
-        return either a tool call or a final text response.
-        """
+from enterprise_workflow_env.client import EnterpriseWorkflowEnv
+from enterprise_workflow_env.models  import EnterpriseAction
+
+with EnterpriseWorkflowEnv(
+    base_url="https://yashwanthprabhu-enterprise-workflow-env.hf.space"
+).sync() as env:
+    result = env.reset()
+    result = env.step(EnterpriseAction(
+        tool_name="read_inbox", tool_args={},
+    ))
 ```
 
-Anything implementing this interface can be plugged in — a different LLM, a local model, or a PyTorch policy wrapped in an OpenEnv-style adapter. The reward function, scenarios, and state checks all remain unchanged.
+---
+
+## Environment design
+
+### The 5 mock apps (20 tools)
+
+| App | Tools |
+|---|---|
+| **Email** | read_inbox, read_email, send_email, reply_email |
+| **Chat** | list_channels, read_channel, post_message |
+| **CRM** | get_deal, update_deal_stage, add_note, get_contact, create_contact |
+| **Tasks** | list_tasks, get_task, create_task, assign_task, close_task |
+| **Calendar** | list_meetings, check_conflicts, book_meeting |
+
+### The 4 scenarios
+
+| Scenario | Required tools | Purpose |
+|---|---|---|
+| Morning Check-in | 2 | Easy curriculum — gives untrained models a non-zero reward signal (build-guide Section 6) |
+| Deal Rescue | 8 | Acme Corp cancels their contract. Agent must read, offer discount, update deal, book follow-up, post to sales channel |
+| Team Conflict | 6 | Two engineers claimed the same task. Agent must reassign, resolve, and schedule a sync |
+| Client Onboarding | 7 | New lead emails expressing interest. Agent must create contact, onboarding tasks, kickoff meeting, welcome reply |
+
+### Sparse reward, long-horizon
+
+Per build-guide Section 2: 0 reward per intermediate step, full episode reward on terminal step.
+reset()   -> scenario context + agent_prompt + required_actions
+step()    -> tool_result + sparse_reward (0)
+step()    -> tool_result + sparse_reward (0)
+...
+step()    -> full_episode_reward + done=True
+(fires when required tools called AND state_check passes)
+
+---
+
+## Reward design (hack-resistant)
+
+Per build-guide **Section 7** — 4 independent reward functions instead of 1 scalar:
+
+| Function | Range | What it rewards |
+|---|---|---|
+| tool_correctness_reward | 0 to N | Calling each required tool at least once |
+| tool_efficiency_reward | -K to 0 | Penalizes duplicates (-0.5) and unnecessary calls (-1.0) |
+| task_completion_reward | 0 or +10 | State-based check: did the apps actually end up in the right state? |
+| format_validity_reward | 0 or +2 | No errors, no hallucinated tools, no missing args |
+
+TRL's GRPOTrainer takes `reward_funcs=[fn1, fn2, fn3, fn4]` as a list and tracks each axis independently in metrics.
+
+### State-based success checks
+
+Every scenario defines a `success_check(apps) -> (passed, reasons)` function that inspects the final state of the mock apps. For Deal Rescue this checks:
+
+- Acme deal stage updated to Negotiation (not just that `update_deal_stage` was called — actual state changed)
+- A new note added to the Acme deal
+- A follow-up meeting exists (not in the seeded set)
+- A reply was sent to the Acme contact
+- A message was posted in the sales channel by the agent
+
+An agent calling `book_meeting` with garbage args passes the tool-call check but FAILS the state check.
+
+See [REWARD_HACKING_AUDIT.md](REWARD_HACKING_AUDIT.md) for a full exploit analysis.
+
+---
+
+## Real-world Google Calendar integration
+
+Most hackathon projects stop at simulation. This one goes further — **the same agent code can book real meetings on a real Google Calendar** via OAuth.
+
+```python
+from integrations.google_calendar import RealCalendarApp
+
+cal = RealCalendarApp()
+cal.book_meeting(
+    title="Hackathon Demo Meeting",
+    attendees=["rajesh.kumar@acmecorp.com"],
+    date="2026-04-26", time="14:00", duration_mins=30,
+)
+# -> Creates a real event on your Google Calendar
+```
+
+Uses Google Calendar API v3 with OAuth 2.0 installed-app flow. Scopes limited to `/auth/calendar`. Credentials never committed to git.
+
+---
+
+## Self-improvement demonstration
+
+Before-and-after evidence that the agent learns without any model retraining:
+
+| Scenario | Run 1 reward | Run 2 reward (with memory loop) | Delta |
+|---|---|---|---|
+| Team Conflict | 1 | 21 | **+20** |
+
+After each episode, an LLM extracts a 1-2 sentence lesson from the trajectory and final reward. The next episode of the same scenario receives these lessons in its system prompt. No weights changed — but behavior changes.
+
+The reward signal the memory loop uses is the **same one a PyTorch policy would use**. When plugged into OpenEnv + GRPO (see training below), the reward function works unchanged.
+
+---
+
+## Training pipeline
+
+Minimal GRPO training script at `training/train_grpo.py`:
+
+```bash
+# Dry-run (no GPU, scripted agent validates pipeline)
+python training/train_grpo.py --dry-run
+
+# Full training (requires CUDA)
+python training/train_grpo.py
+```
+
+- Built on HuggingFace TRL (GRPOTrainer)
+- Passes the 4 independent reward functions to `reward_funcs=[...]`
+- Connects to the live HF Space over WebSocket
+- Target model: Qwen2.5-1.5B-Instruct (fits on T4 free tier)
+
+Validated end-to-end via dry-run: scripted agent -> live HF Space -> multi-reward scoring -> total: +20.0, task_success: True.
 
 ---
 
 ## Quickstart
 
-### 1. Clone and set up
-
 ```bash
 git clone https://github.com/yashwanthprabhu07/scalar-x-meta-.git
 cd scalar-x-meta-
+git checkout hackathon-polish
 python -m venv venv
-source venv/bin/activate          # or: venv\Scripts\activate on Windows
+source venv/bin/activate            # Windows: venv\Scripts\activate
 pip install -r requirements.txt
+
+cp .env.example .env                # Add your GROQ_API_KEY
+streamlit run dashboard.py          # Opens at localhost:8501
 ```
 
-### 2. Configure your LLM
-
-Copy the example env file and add your Groq API key (free at [console.groq.com](https://console.groq.com)):
-
-```bash
-cp .env.example .env
-# edit .env and set GROQ_API_KEY=your_key_here
-```
-
-### 3. Run the dashboard
-
-```bash
-streamlit run dashboard.py
-```
-
-Open [http://localhost:8501](http://localhost:8501) in your browser, pick a scenario, click **▶ Run Agent**, and watch the live feed.
+For real Google Calendar integration, see `integrations/test_calendar_auth.py` for OAuth setup.
 
 ---
 
-## Project status
-
-This is a hackathon submission. It is **not** production code. Known limitations:
-
-- In-memory state only (no persistence across dashboard restarts beyond session state).
-- Groq free tier has a daily token limit; heavy testing can exhaust it.
-- The self-improvement loop is prompt-based, not model-based.
-- Only 3 scenarios are included; the architecture supports adding more trivially via `scenarios.py`.
+## Project structure
+scalar-x-meta-/
+|-- openenv/enterprise_workflow_env/      # OpenEnv environment (deployed)
+|   |-- client.py
+|   |-- models.py
+|   |-- openenv.yaml
+|   -- server/
+|       |-- app.py
+|       |-- enterprise_workflow_env_environment.py
+|       |-- mock_apps.py
+|       |-- scenarios.py
+|       -- reward.py
+|-- training/
+|   |-- rollout.py                         # Episode runner (WebSocket)
+|   -- train_grpo.py                      # GRPO trainer (TRL)
+|-- integrations/
+|   |-- google_calendar.py                 # Real Calendar API wrapper
+|   -- test_calendar_auth.py              # OAuth verification
+|-- agent.py                               # Baseline Groq-powered agent
+|-- tools.py                               # 20 tool schemas (OpenAI format)
+|-- mock_apps.py                           # Dashboard copy
+|-- scenarios.py                           # Dashboard copy (4 scenarios)
+|-- reward_funcs.py                        # 4 independent reward fns
+|-- memory.py                              # Between-episode lessons
+|-- dashboard.py                           # Streamlit demo UI
+-- REWARD_HACKING_AUDIT.md
 
 ---
 
-## Future work
+## Tech stack
 
-- **Swap baseline to Anthropic Claude** for production reliability.
-- **Add a real PyTorch policy baseline** trained against this environment via OpenEnv.
-- **Expand to 10+ scenarios** covering error recovery, partial-information tasks, and multi-agent coordination.
-- **Add adversarial scenarios** — situations designed to trip common LLM failure modes (ID hallucination, unnecessary tool repetition, premature termination).
+- **OpenEnv 0.2.3** — environment protocol
+- **HuggingFace TRL** — GRPO trainer
+- **HuggingFace Spaces** — environment hosting
+- **FastAPI** — HTTP server
+- **Google Calendar API v3** — real-world integration
+- **Groq + Llama-3.3-70B** — baseline agent LLM
+- **Streamlit** — live demo dashboard
+- **Qwen2.5-1.5B-Instruct** — training target
 
 ---
 
-## Hackathon
+## How this addresses the hackathon themes
 
-Built for the **Scaler × Meta PyTorch OpenEnv Hackathon**, April 2026.
+**Primary: Theme #3.1 — World Modeling / Professional Tasks.**
+Captures nuances of a partially observable enterprise world across 5 apps. Real Calendar integration extends to actual SaaS APIs.
+
+**Also:**
+- **Theme #2 (Long-Horizon):** Deal Rescue = 8 coordinated calls, sparse delayed reward.
+- **Theme #4 (Self-Improvement):** memory loop: Team Conflict 1 -> 21 without retraining.
+
+---
+
+## Submission materials
+
+- **Live Space:** https://huggingface.co/spaces/yashwanthprabhu/enterprise-workflow-env
+- **GitHub repo:** https://github.com/yashwanthprabhu07/scalar-x-meta- (branch: `hackathon-polish`)
+- **Mini-blog:** _coming soon — will be posted on HuggingFace_
+- **Demo video:** _coming soon — will be on YouTube_
+- **Training reward plots:** _coming soon — from live GRPO run_
+
+---
+
+## Team
+
+**Yashwanth Prabhu R** (team lead), Vivek Gowda NV, Chaitanya S Shetty.
+
+Submitted for the Meta PyTorch OpenEnv × Scaler School of Technology Hackathon, Bangalore, April 25-26, 2026.
+
+---
+
+## Acknowledgments
+
+- **Meta PyTorch** for OpenEnv
+- **HuggingFace** for TRL, Spaces hosting, and models
+- **Scaler School of Technology** for organizing the hackathon and providing compute credits
+
+---
 
 ## License
 
