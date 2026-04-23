@@ -1,5 +1,5 @@
-# ============================================================
-# scenarios.py — The 3 Task Scenarios
+﻿# ============================================================
+# scenarios.py â€” The Task Scenarios
 # Each scenario is a dict that tells the agent what to do,
 # defines what "success" looks like as required tool calls,
 # AND includes a state-based check that inspects the final
@@ -7,14 +7,12 @@
 # ============================================================
 
 
-# ─────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # STATE-BASED SUCCESS CHECKS
-# Each returns (passed: bool, reasons: list[str])
-# reasons lists what was checked and whether it passed/failed
-# ─────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def check_deal_rescue(apps: dict) -> tuple:
-    """Verify the Acme deal was actually rescued — not just that tools were called."""
+    """Verify the Acme deal was actually rescued."""
     reasons = []
     passed = True
 
@@ -23,7 +21,6 @@ def check_deal_rescue(apps: dict) -> tuple:
     email = apps["email"]
     chat = apps["chat"]
 
-    # 1. Find the Acme deal (deal_001 in seed data)
     acme_deal = None
     for deal in crm.deals.values():
         if "acme" in deal.get("company", "").lower():
@@ -31,54 +28,49 @@ def check_deal_rescue(apps: dict) -> tuple:
             break
 
     if acme_deal is None:
-        reasons.append("❌ No Acme deal found in CRM")
+        reasons.append("âŒ No Acme deal found in CRM")
         passed = False
     else:
-        # 1a. Deal stage should be updated away from 'Active'
         stage = acme_deal.get("stage", "")
         if stage in ("Negotiation", "At Risk"):
-            reasons.append(f"✅ Acme deal stage updated to '{stage}'")
+            reasons.append(f"âœ… Acme deal stage updated to '{stage}'")
         else:
-            reasons.append(f"❌ Acme deal stage is still '{stage}', expected Negotiation or At Risk")
+            reasons.append(f"âŒ Acme deal stage is still '{stage}', expected Negotiation or At Risk")
             passed = False
 
-        # 1b. At least one NEW note should have been added (seed has 2 notes)
         notes = acme_deal.get("notes", [])
         if len(notes) > 2:
-            reasons.append(f"✅ New note added to Acme deal ({len(notes)} notes total)")
+            reasons.append(f"âœ… New note added to Acme deal ({len(notes)} notes total)")
         else:
-            reasons.append(f"❌ No new note added to Acme deal (still {len(notes)} notes)")
+            reasons.append(f"âŒ No new note added to Acme deal (still {len(notes)} notes)")
             passed = False
 
-    # 2. A follow-up meeting should exist (seed calendar has 2 meetings)
     follow_up_meetings = [
         m for m in calendar.meetings
         if m["id"] not in ("meet_001", "meet_002")
     ]
     if len(follow_up_meetings) > 0:
-        reasons.append(f"✅ Follow-up meeting booked ({len(follow_up_meetings)} new meeting(s))")
+        reasons.append(f"âœ… Follow-up meeting booked ({len(follow_up_meetings)} new meeting(s))")
     else:
-        reasons.append("❌ No new follow-up meeting was booked")
+        reasons.append("âŒ No new follow-up meeting was booked")
         passed = False
 
-    # 3. A reply to the Acme cancellation email should have been sent
     acme_replies = [
         e for e in email.sent
         if "acme" in e.get("to", "").lower() or "rajesh" in e.get("to", "").lower()
     ]
     if len(acme_replies) > 0:
-        reasons.append(f"✅ Reply email sent to Acme ({len(acme_replies)} email(s))")
+        reasons.append(f"âœ… Reply email sent to Acme ({len(acme_replies)} email(s))")
     else:
-        reasons.append("❌ No reply email was sent to the Acme client")
+        reasons.append("âŒ No reply email was sent to the Acme client")
         passed = False
 
-    # 4. A message should be posted in the sales channel (seed has 1 message)
     sales_messages = chat.channels.get("sales", [])
     agent_sales_msgs = [m for m in sales_messages if m.get("user") == "agent"]
     if len(agent_sales_msgs) > 0:
-        reasons.append(f"✅ Agent posted in sales channel ({len(agent_sales_msgs)} message(s))")
+        reasons.append(f"âœ… Agent posted in sales channel ({len(agent_sales_msgs)} message(s))")
     else:
-        reasons.append("❌ No message posted by agent in sales channel")
+        reasons.append("âŒ No message posted by agent in sales channel")
         passed = False
 
     return passed, reasons
@@ -93,33 +85,30 @@ def check_team_conflict(apps: dict) -> tuple:
     calendar = apps["calendar"]
     chat = apps["chat"]
 
-    # 1. TASK-003 should be reassigned to sneha (was arjun in seed)
     task_003 = tasks.tasks.get("TASK-003")
     if task_003 is None:
-        reasons.append("❌ TASK-003 not found")
+        reasons.append("âŒ TASK-003 not found")
         passed = False
     else:
         assignee = task_003.get("assigned_to", "").lower()
         if "sneha" in assignee:
-            reasons.append("✅ TASK-003 reassigned to Sneha")
+            reasons.append("âœ… TASK-003 reassigned to Sneha")
         else:
-            reasons.append(f"❌ TASK-003 assigned to '{assignee}', expected Sneha")
+            reasons.append(f"âŒ TASK-003 assigned to '{assignee}', expected Sneha")
             passed = False
 
-    # 2. TASK-004 should be reassigned to arjun (was 'unassigned' in seed)
     task_004 = tasks.tasks.get("TASK-004")
     if task_004 is None:
-        reasons.append("❌ TASK-004 not found")
+        reasons.append("âŒ TASK-004 not found")
         passed = False
     else:
         assignee = task_004.get("assigned_to", "").lower()
         if "arjun" in assignee:
-            reasons.append("✅ TASK-004 assigned to Arjun")
+            reasons.append("âœ… TASK-004 assigned to Arjun")
         else:
-            reasons.append(f"❌ TASK-004 assigned to '{assignee}', expected Arjun")
+            reasons.append(f"âŒ TASK-004 assigned to '{assignee}', expected Arjun")
             passed = False
 
-    # 3. A sync meeting should be booked with both arjun and sneha (new meeting, not seeded)
     sync_meetings = [
         m for m in calendar.meetings
         if m["id"] not in ("meet_001", "meet_002")
@@ -127,18 +116,17 @@ def check_team_conflict(apps: dict) -> tuple:
         and "sneha" in [a.lower() for a in m.get("attendees", [])]
     ]
     if len(sync_meetings) > 0:
-        reasons.append("✅ New sync meeting booked with both engineers")
+        reasons.append("âœ… New sync meeting booked with both engineers")
     else:
-        reasons.append("❌ No new meeting found with both Arjun and Sneha")
+        reasons.append("âŒ No new meeting found with both Arjun and Sneha")
         passed = False
 
-    # 4. A resolution message should be posted in the engineering channel by the agent
     eng_messages = chat.channels.get("engineering", [])
     agent_eng_msgs = [m for m in eng_messages if m.get("user") == "agent"]
     if len(agent_eng_msgs) > 0:
-        reasons.append(f"✅ Resolution message posted by agent in engineering channel")
+        reasons.append(f"âœ… Resolution message posted by agent in engineering channel")
     else:
-        reasons.append("❌ No resolution message posted by agent in engineering channel")
+        reasons.append("âŒ No resolution message posted by agent in engineering channel")
         passed = False
 
     return passed, reasons
@@ -155,7 +143,6 @@ def check_client_onboarding(apps: dict) -> tuple:
     email = apps["email"]
     chat = apps["chat"]
 
-    # 1. A contact for Priya / NewClient Inc should exist in CRM (seed only has rajesh)
     priya_contact = None
     for contact in crm.contacts.values():
         name = contact.get("name", "").lower()
@@ -168,12 +155,11 @@ def check_client_onboarding(apps: dict) -> tuple:
             break
 
     if priya_contact:
-        reasons.append(f"✅ Contact created for {priya_contact.get('name', 'new client')}")
+        reasons.append(f"âœ… Contact created for {priya_contact.get('name', 'new client')}")
     else:
-        reasons.append("❌ No contact found for Priya / NewClient Inc")
+        reasons.append("âŒ No contact found for Priya / NewClient Inc")
         passed = False
 
-    # 2. At least one new onboarding-related task should exist (seed has TASK-001..004)
     seeded_ids = {"TASK-001", "TASK-002", "TASK-003", "TASK-004"}
     new_tasks = [
         t for t in tasks.tasks.values()
@@ -181,60 +167,55 @@ def check_client_onboarding(apps: dict) -> tuple:
     ]
     if len(new_tasks) >= 1:
         titles = ", ".join(t.get("title", "")[:40] for t in new_tasks)
-        reasons.append(f"✅ New task(s) created ({len(new_tasks)}): {titles}")
+        reasons.append(f"âœ… New task(s) created ({len(new_tasks)}): {titles}")
     else:
-        reasons.append("❌ No new onboarding tasks were created")
+        reasons.append("âŒ No new onboarding tasks were created")
         passed = False
 
-    # 3. A kickoff meeting should be booked (new meeting, not seeded)
     new_meetings = [
         m for m in calendar.meetings
         if m["id"] not in ("meet_001", "meet_002")
     ]
     if len(new_meetings) > 0:
-        reasons.append(f"✅ New meeting booked ({len(new_meetings)} meeting(s))")
+        reasons.append(f"âœ… New meeting booked ({len(new_meetings)} meeting(s))")
     else:
-        reasons.append("❌ No new kickoff meeting booked")
+        reasons.append("âŒ No new kickoff meeting booked")
         passed = False
 
-    # 4. A welcome reply should have been sent to priya / newclient
     welcome_replies = [
         e for e in email.sent
         if "priya" in e.get("to", "").lower() or "newclient" in e.get("to", "").lower()
     ]
     if len(welcome_replies) > 0:
-        reasons.append(f"✅ Welcome reply sent to new client")
+        reasons.append(f"âœ… Welcome reply sent to new client")
     else:
-        reasons.append("❌ No welcome reply sent to the new client")
+        reasons.append("âŒ No welcome reply sent to the new client")
         passed = False
 
-    # 5. A message should be posted in the general channel by the agent
     general_messages = chat.channels.get("general", [])
     agent_general_msgs = [m for m in general_messages if m.get("user") == "agent"]
     if len(agent_general_msgs) > 0:
-        reasons.append("✅ Announcement posted by agent in general channel")
+        reasons.append("âœ… Announcement posted by agent in general channel")
     else:
-        reasons.append("❌ No announcement posted by agent in general channel")
+        reasons.append("âŒ No announcement posted by agent in general channel")
         passed = False
 
     return passed, reasons
 
 
-# ─────────────────────────────────────────────
+def check_morning_checkin(apps: dict) -> tuple:
+    """Easy curriculum scenario â€” passes automatically if tools were called."""
+    return (True, ["âœ… Morning check-in complete (no state mutations required)"])
+
+
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # SCENARIOS
-#
-# expected_counts: optional dict that tells the reward function how many
-# times each tool is legitimately expected to be called. If a tool is
-# called more than this count, the extras are penalized. If a tool isn't
-# listed here, it defaults to 1 (i.e. any repeat is an extra).
-# This lets scenarios that genuinely need multiple calls to the same
-# tool (e.g. creating two different tasks) score fully.
-# ─────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 SCENARIOS = [
     {
         "id": "scenario_deal_rescue",
-        "name": "🔥 Deal Rescue",
+        "name": "ðŸ”¥ Deal Rescue",
         "description": "Acme Corp just emailed to cancel their $50,000 contract. "
                        "The agent must read the email, check the CRM deal, reply with a discount offer, "
                        "update the deal stage, and book a follow-up call.",
@@ -262,16 +243,13 @@ SCENARIOS = [
             "book_meeting",
             "post_message",
         ],
-        "expected_counts": {
-            # Deal Rescue: each tool is called exactly once.
-            # No override needed — all defaults are 1.
-        },
+        "expected_counts": {},
         "success_check": check_deal_rescue,
     },
     {
         "id": "scenario_team_conflict",
-        "name": "⚔️ Team Conflict",
-        "description": "Two engineers — Arjun and Sneha — both claimed the same task (TASK-003). "
+        "name": "âš”ï¸ Team Conflict",
+        "description": "Two engineers â€” Arjun and Sneha â€” both claimed the same task (TASK-003). "
                        "The agent must read the conflict in chat, resolve it by reassigning tasks, "
                        "notify both engineers, and schedule a sync meeting.",
         "agent_prompt": (
@@ -297,14 +275,13 @@ SCENARIOS = [
             "book_meeting",
         ],
         "expected_counts": {
-            # Two reassignments: TASK-003 → Sneha, TASK-004 → Arjun
             "assign_task": 2,
         },
         "success_check": check_team_conflict,
     },
     {
         "id": "scenario_client_onboarding",
-        "name": "🚀 Client Onboarding",
+        "name": "ðŸš€ Client Onboarding",
         "description": "A new client (Priya Sharma from NewClient Inc) has emailed expressing interest. "
                        "The agent must read the email, create a CRM contact and deal, "
                        "create onboarding tasks, book a kickoff meeting, and send a welcome email.",
@@ -333,9 +310,28 @@ SCENARIOS = [
             "post_message",
         ],
         "expected_counts": {
-            # Two tasks to create: one for arjun, one for sneha
             "create_task": 2,
         },
         "success_check": check_client_onboarding,
+    },
+    {
+        "id": "scenario_morning_checkin",
+        "name": "â˜€ï¸ Morning Check-in",
+        "description": "Start of the workday. The agent reads the inbox and lists "
+                       "chat channels to get oriented. Curriculum scenario for "
+                       "easy early reward during training.",
+        "agent_prompt": (
+            "You are starting your workday as an AI employee. "
+            "To get oriented, do exactly two things:\n"
+            "1. Read your inbox to see what emails arrived\n"
+            "2. List the available team chat channels\n"
+            "After those two tool calls, you're done. Do not call any other tools."
+        ),
+        "required_actions": [
+            "read_inbox",
+            "list_channels",
+        ],
+        "expected_counts": {},
+        "success_check": check_morning_checkin,
     },
 ]
