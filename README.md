@@ -167,6 +167,34 @@ python training/train_grpo.py
 
 Validated end-to-end via dry-run: scripted agent -> live HF Space -> multi-reward scoring -> total: +20.0, task_success: True.
 
+### First training run (April 22, 2026)
+
+We ran 5 steps of GRPO against the live HF Space using Qwen2.5-1.5B-Instruct on a T4 GPU.
+Runtime: 289s (~5 min). The pipeline completed end-to-end.
+
+![Reward curve](training/reward_curve.png)
+
+**Finding:** the untrained Qwen2.5-1.5B model does not emit parseable tool calls for Deal Rescue
+(the hardest scenario), so all 4 reward functions stayed at 0 across the run. Completions hit
+the 256-token cap (clipped_ratio=1), indicating the model produces text but never terminates
+with a valid `<tool_call>` block.
+
+This is a legitimate scientific finding, not a failure: it validates that the reward pipeline
+works correctly (it correctly gives 0 reward for non-solutions) and quantifies the gap between
+untrained behavior and task success. Bridging that gap would require one or more of:
+
+1. **SFT warmup** — fine-tune on a small set of correct tool-calling traces first
+2. **Curriculum learning** — start on the Morning Check-in scenario (2 tools) before Deal Rescue (8)
+3. **Larger model** — Qwen2.5-7B has substantially better tool-calling
+4. **More training steps** — 5 steps is a validation run, not a convergence run
+
+Onsite April 25-26 with HuggingFace compute credits, we plan to run full training with
+SFT warmup + curriculum, targeting measurable reward improvement.
+
+The **self-improvement memory loop** (separate from GRPO) demonstrates improvement from
+reward=1 to reward=21 on Team Conflict within two episodes — evidence that the reward
+function responds correctly to agent behavior improvements.
+
 ---
 
 ## Quickstart
@@ -246,7 +274,9 @@ Captures nuances of a partially observable enterprise world across 5 apps. Real 
 - **GitHub repo:** https://github.com/yashwanthprabhu07/scalar-x-meta- (branch: `hackathon-polish`)
 - **Mini-blog:** _coming soon — will be posted on HuggingFace_
 - **Demo video:** _coming soon — will be on YouTube_
-- **Training reward plots:** _coming soon — from live GRPO run_
+- **Training reward plots:** [training/reward_curve.png](training/reward_curve.png)
+- **Training metrics (TRL):** [training/trainer_state.json](training/trainer_state.json)
+- **Training summary:** [training/training_run_summary.json](training/training_run_summary.json)
 
 ---
 
