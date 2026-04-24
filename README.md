@@ -247,7 +247,7 @@ scalar-x-meta-/
 ## Tech stack
 
 - **OpenEnv 0.2.3** — environment protocol
-- **HuggingFace TRL** — GRPO trainer
+- **HuggingFace TRL + Unsloth** — GRPO trainer with 4-bit QLoRA (faster training, lower VRAM)
 - **HuggingFace Spaces** — environment hosting
 - **FastAPI** — HTTP server
 - **Google Calendar API v3** — real-world integration
