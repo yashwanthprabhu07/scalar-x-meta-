@@ -101,16 +101,39 @@ def make_deal_rescue_scripted_agent() -> AgentFn:
 # CELL 5 — MODEL-BACKED AGENT
 # ═══════════════════════════════════════════════════════════
 def load_model_and_tokenizer(model_name: str):
-    """Lazy import — local dry-runs don't require transformers."""
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-    import torch
-
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
-    )
+    """Load model with Unsloth for faster training and lower VRAM usage."""
+    try:
+        from unsloth import FastLanguageModel
+        model, tokenizer = FastLanguageModel.from_pretrained(
+            model_name=model_name,
+            max_seq_length=1024,
+            dtype=None,           # auto-detect: bfloat16 on Ampere+, float16 otherwise
+            load_in_4bit=True,    # QLoRA — halves VRAM usage vs full precision
+        )
+        # Add LoRA adapters for efficient fine-tuning
+        model = FastLanguageModel.get_peft_model(
+            model,
+            r=16,                 # LoRA rank
+            target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                           "gate_proj", "up_proj", "down_proj"],
+            lora_alpha=16,
+            lora_dropout=0,
+            bias="none",
+            use_gradient_checkpointing="unsloth",
+            random_state=42,
+        )
+        print("   Using Unsloth (4-bit QLoRA)")
+    except Exception as e:
+        # Fallback to standard transformers (CPU or no Unsloth)
+        print(f"   Unsloth not available ({e}), using standard transformers")
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        import torch
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.bfloat16,
+            device_map="auto",
+        )
     return model, tokenizer
 
 
