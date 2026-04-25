@@ -134,6 +134,21 @@ Uses Google Calendar API v3 with OAuth 2.0 installed-app flow. Scopes limited to
 
 ---
 
+### Real-World Integrations (OAuth 2.0)
+
+The environment can book actual meetings, read real emails, and send real replies — proving the simulation extends to production.
+
+| Integration | API | Methods |
+|---|---|---|
+| 📅 **Google Calendar** | Calendar v3 | `list_meetings`, `check_conflicts`, `book_meeting` |
+| 📧 **Gmail** | Gmail v1 | `read_inbox`, `read_email`, `send_email`, `reply_email` |
+
+Both follow the same OAuth 2.0 pattern. The same agent code that drives mock apps can drive real production systems via a single flag flip — `RealCalendarApp` and `RealEmailApp` are drop-in replacements for `CalendarApp` and `EmailApp`.
+
+See [`integrations/google_calendar.py`](integrations/google_calendar.py) and [`integrations/gmail.py`](integrations/gmail.py).
+
+---
+
 ## Self-improvement demonstration
 
 Before-and-after evidence that the agent learns without any model retraining:
