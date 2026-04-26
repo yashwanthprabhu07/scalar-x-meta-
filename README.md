@@ -1,3 +1,14 @@
+---
+title: AI Enterprise Workflow Environment
+emoji: 🏢
+colorFrom: blue
+colorTo: purple
+sdk: gradio
+sdk_version: "4.44.0"
+python_version: "3.10"
+app_file: app.py
+pinned: false
+---
 # AI Enterprise Workflow Environment
 
 > An **OpenEnv-compliant environment** for training LLM agents on long-horizon, multi-app enterprise workflows. Built for the **Meta PyTorch OpenEnv × Scaler School of Technology Hackathon** (April 2026).
