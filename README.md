@@ -1,6 +1,6 @@
 ---
 title: AI Enterprise Workflow Environment
-
+emoji: 🤖
 colorFrom: blue
 colorTo: purple
 sdk: docker
