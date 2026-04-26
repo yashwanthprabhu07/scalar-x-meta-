@@ -1,5 +1,5 @@
 # ============================================================
-# reward.py — Reward Function and Episode Logger
+# reward.py - Reward Function and Episode Logger
 # This scores how well the agent did after each task.
 # Higher score = agent did better.
 # ============================================================
@@ -21,7 +21,7 @@ def calculate_reward(required_actions: list,
       +10 if task fully completed, else -10
       +2  for each DISTINCT required action that was correctly taken
       -5  for each required action that was MISSED
-      -1  for every EXTRA call — this includes:
+      -1  for every EXTRA call - this includes:
             * calls to tools not in required_actions
             * calls to a required tool BEYOND its expected count
               (e.g. if expected_counts says create_task: 2, then
@@ -49,10 +49,10 @@ def calculate_reward(required_actions: list,
     # +10 / -10 for task outcome
     if task_success:
         score += 10
-        breakdown.append("+10 Task fully completed ✅")
+        breakdown.append("+10 Task fully completed")
     else:
         score -= 10
-        breakdown.append("-10 Task failed ❌")
+        breakdown.append("-10 Task failed")
 
     # +2 for each DISTINCT required action correctly taken
     correct_actions = required_set & set(taken_counts.keys())
@@ -91,7 +91,7 @@ def calculate_reward(required_actions: list,
             )
 
     # Max possible score: +10 for success, +2 per distinct required action.
-    # (We don't reward multi-count in the max — the +2 is per distinct tool.)
+    # (We don't reward multi-count in the max - the +2 is per distinct tool.)
     max_possible = 10 + (2 * len(required_set))
 
     return {

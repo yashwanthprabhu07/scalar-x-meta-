@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(unset PYTHONIOENCODING)",
+      "Bash(timeout 60 python -u -c ' *)"
+    ]
+  }
+}

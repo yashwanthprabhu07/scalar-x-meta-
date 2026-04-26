@@ -1,5 +1,5 @@
 # ============================================================
-# agent.py — The AI Agent Loop (Using Groq API — free & fast)
+# agent.py - The AI Agent Loop (Using Groq API - free & fast)
 # This is the brain of the project.
 # It sends tasks to Groq AI, gets tool call responses,
 # runs the tools on mock apps, and loops until done.
@@ -22,12 +22,25 @@
 #   - Lessons are persisted to agent_memory.json across restarts
 # ============================================================
 import os
+import sys
 import json
 import time
 from groq import Groq
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Force UTF-8 on stdout/stderr so the emoji prints ([KEY] [TOOL] [LESSON] ...) don't crash
+# on Windows terminals that default to cp1252. Without this, the very first
+# emoji print raises UnicodeEncodeError, the worker thread's try/except
+# turns it into a generic error, and the dashboard appears "stuck".
+for _stream in (sys.stdout, sys.stderr):
+    _reconfigure = getattr(_stream, "reconfigure", None)
+    if callable(_reconfigure):
+        try:
+            _reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
 from mock_apps import EmailApp, ChatApp, CRMApp, TaskApp, CalendarApp
 from tools import ALL_TOOLS
@@ -38,9 +51,9 @@ from memory import format_lessons_for_prompt, add_lesson, get_lessons
 from lesson_extractor import extract_lesson
 
 
-# ─────────────────────────────────────────────
-# GROQ CLIENT POOL — multi-key automatic failover
-# ─────────────────────────────────────────────
+# ---------------------------------------------
+# GROQ CLIENT POOL - multi-key automatic failover
+# ---------------------------------------------
 class GroqClientPool:
     """
     Manages one or more Groq API keys with automatic failover.
@@ -58,7 +71,7 @@ class GroqClientPool:
         self.current_index = 0
         self.clients = [Groq(api_key=k) for k in api_keys]
         self.exhausted = [False] * len(api_keys)
-        print(f"   🔑 Groq client pool initialized with {len(api_keys)} key(s)")
+        print(f"   [KEY] Groq client pool initialized with {len(api_keys)} key(s)")
 
     def current_client(self) -> Groq:
         """Return the currently active Groq client (for callers who need direct access)."""
@@ -66,17 +79,18 @@ class GroqClientPool:
 
     def _mark_exhausted_and_rotate(self):
         self.exhausted[self.current_index] = True
-        print(f"   🔄 Key #{self.current_index + 1} exhausted, trying next key...")
+        print(f"   [ROTATE] Key #{self.current_index + 1} exhausted, trying next key...")
         for i in range(len(self.clients)):
             next_idx = (self.current_index + 1 + i) % len(self.clients)
             if not self.exhausted[next_idx]:
                 self.current_index = next_idx
-                print(f"   ✅ Failed over to key #{self.current_index + 1}")
+                print(f"   [OK] Failed over to key #{self.current_index + 1}")
                 return True
         return False
 
     def call(self, *, model, max_tokens, tools, tool_choice, messages,
-             max_retries_per_key: int = 3, base_delay: float = 1.0):
+             max_retries_per_key: int = 3, base_delay: float = 1.0,
+             request_timeout: float = 90.0):
         last_exception = None
 
         while True:
@@ -84,7 +98,10 @@ class GroqClientPool:
 
             for attempt in range(1, max_retries_per_key + 1):
                 try:
-                    return client.chat.completions.create(
+                    # Per-request timeout prevents a dropped TCP connection
+                    # from hanging the entire episode. The retry loop above
+                    # will catch the timeout and try again / failover.
+                    return client.with_options(timeout=request_timeout).chat.completions.create(
                         model=model,
                         max_tokens=max_tokens,
                         tools=tools,
@@ -103,21 +120,21 @@ class GroqClientPool:
                     )
 
                     if is_rate_limit:
-                        print(f"   ⚠️  Rate limit hit on key #{self.current_index + 1}: {str(e)[:120]}")
+                        print(f"   [WARN]  Rate limit hit on key #{self.current_index + 1}: {str(e)[:120]}")
                         if self._mark_exhausted_and_rotate():
                             break
                         else:
-                            print("   ❌ All keys exhausted.")
+                            print("   [FAIL] All keys exhausted.")
                             raise
 
                     if attempt < max_retries_per_key:
                         delay = base_delay * (2 ** (attempt - 1))
-                        print(f"   ⚠️  Groq call failed (attempt {attempt}/{max_retries_per_key}, key #{self.current_index + 1}): "
+                        print(f"   [WARN]  Groq call failed (attempt {attempt}/{max_retries_per_key}, key #{self.current_index + 1}): "
                               f"{type(e).__name__}: {str(e)[:120]}")
                         print(f"      Retrying in {delay}s...")
                         time.sleep(delay)
                     else:
-                        print(f"   ❌ Groq call failed after {max_retries_per_key} attempts on key #{self.current_index + 1}: "
+                        print(f"   [FAIL] Groq call failed after {max_retries_per_key} attempts on key #{self.current_index + 1}: "
                               f"{type(e).__name__}: {e}")
                         raise
 
@@ -133,9 +150,9 @@ def _load_groq_keys() -> list:
     return keys
 
 
-# ─────────────────────────────────────────────
+# ---------------------------------------------
 # FRESH APPS PER EPISODE
-# ─────────────────────────────────────────────
+# ---------------------------------------------
 def create_fresh_apps():
     return {
         "email":    EmailApp(),
@@ -146,22 +163,22 @@ def create_fresh_apps():
     }
 
 
-# ─────────────────────────────────────────────
+# ---------------------------------------------
 # TOOL DISPATCH TABLE
-# ─────────────────────────────────────────────
+# ---------------------------------------------
 TOOL_DISPATCH = {
-    # ── Email ─────────────────────────────────────────────
+    # -- Email ---------------------------------------------
     "read_inbox":         lambda ti, apps: apps["email"].read_inbox(),
     "read_email":         lambda ti, apps: apps["email"].read_email(ti["email_id"]),
     "send_email":         lambda ti, apps: apps["email"].send_email(ti["to"], ti["subject"], ti["body"]),
     "reply_email":        lambda ti, apps: apps["email"].reply_email(ti["email_id"], ti["body"]),
 
-    # ── Chat ──────────────────────────────────────────────
+    # -- Chat ----------------------------------------------
     "list_channels":      lambda ti, apps: apps["chat"].list_channels(),
     "read_channel":       lambda ti, apps: apps["chat"].read_channel(ti["channel"]),
     "post_message":       lambda ti, apps: apps["chat"].post_message(ti["channel"], ti["message"]),
 
-    # ── CRM ───────────────────────────────────────────────
+    # -- CRM -----------------------------------------------
     "get_deal":           lambda ti, apps: apps["crm"].get_deal(ti["deal_id"]),
     "update_deal_stage":  lambda ti, apps: apps["crm"].update_deal_stage(ti["deal_id"], ti["new_stage"]),
     "add_note":           lambda ti, apps: apps["crm"].add_note(ti["deal_id"], ti["note"]),
@@ -170,7 +187,7 @@ TOOL_DISPATCH = {
                               ti["name"], ti["email"], ti["company"], ti.get("phone", "")
                           ),
 
-    # ── Tasks ─────────────────────────────────────────────
+    # -- Tasks ---------------------------------------------
     "list_tasks":         lambda ti, apps: apps["tasks"].list_tasks(),
     "get_task":           lambda ti, apps: apps["tasks"].get_task(ti["task_id"]),
     "create_task":        lambda ti, apps: apps["tasks"].create_task(
@@ -179,7 +196,7 @@ TOOL_DISPATCH = {
     "assign_task":        lambda ti, apps: apps["tasks"].assign_task(ti["task_id"], ti["user"]),
     "close_task":         lambda ti, apps: apps["tasks"].close_task(ti["task_id"]),
 
-    # ── Calendar ──────────────────────────────────────────
+    # -- Calendar ------------------------------------------
     "list_meetings":      lambda ti, apps: apps["calendar"].list_meetings(ti.get("date")),
     "check_conflicts":    lambda ti, apps: apps["calendar"].check_conflicts(
                               ti["date"], ti["time"], ti["attendees"]
@@ -207,24 +224,24 @@ def execute_tool(tool_name: str, tool_input: dict, apps: dict) -> str:
     return json.dumps(result, indent=2)
 
 
-# ─────────────────────────────────────────────
+# ---------------------------------------------
 # BASE SYSTEM PROMPT
 # Lessons (if any exist) are appended to this at runtime.
-# ─────────────────────────────────────────────
+# ---------------------------------------------
 _BASE_SYSTEM_PROMPT = (
     "You are an efficient AI employee at a company. "
     "You have access to 5 company apps: Email, Chat, CRM, Tasks, and Calendar. "
     "Complete all the steps in the user's task using the available tools. "
-    "Be thorough — use every tool needed to fully complete the task. "
+    "Be thorough - use every tool needed to fully complete the task. "
     "IMPORTANT: Do not call the same tool more than once unless you have a clear new reason. "
     "Before acting, read the relevant state first (inbox, channel, task). "
     "If a tool returns an error, examine the error message and try a different approach."
 )
 
 
-# ─────────────────────────────────────────────
+# ---------------------------------------------
 # MAIN AGENT LOOP
-# ─────────────────────────────────────────────
+# ---------------------------------------------
 def run_agent(scenario: dict, progress_callback=None):
     """
     Runs the AI agent on one scenario. Loads lessons from past attempts
@@ -244,7 +261,7 @@ def run_agent(scenario: dict, progress_callback=None):
         )
     pool = GroqClientPool(keys)
 
-    # ── LOAD LESSONS FROM MEMORY ─────────────────────────────
+    # -- LOAD LESSONS FROM MEMORY -----------------------------
     # If we've run this scenario before, we may have lessons.
     # Inject them into the system prompt for this run.
     scenario_id = scenario["id"]
@@ -252,11 +269,11 @@ def run_agent(scenario: dict, progress_callback=None):
     prior_lessons = get_lessons(scenario_id)
 
     if prior_lessons:
-        print(f"   🧠 Loaded {len(prior_lessons)} lesson(s) from memory for this scenario")
+        print(f"   [MEM] Loaded {len(prior_lessons)} lesson(s) from memory for this scenario")
         for i, lesson in enumerate(prior_lessons, 1):
             print(f"      {i}. {lesson['text'][:100]}")
     else:
-        print(f"   🧠 No prior lessons for this scenario — running without memory")
+        print(f"   [MEM] No prior lessons for this scenario - running without memory")
 
     system_prompt = _BASE_SYSTEM_PROMPT + lessons_text
 
@@ -288,7 +305,7 @@ def run_agent(scenario: dict, progress_callback=None):
     max_iterations = 20
     hit_iteration_limit = False
 
-    # ── MAIN LOOP ─────────────────────────────────────────
+    # -- MAIN LOOP -----------------------------------------
     for iteration in range(1, max_iterations + 1):
         print(f"[Iteration {iteration}] Asking Groq what to do next...")
 
@@ -302,11 +319,11 @@ def run_agent(scenario: dict, progress_callback=None):
 
         message = response.choices[0].message
         finish_reason = response.choices[0].finish_reason
-        print(f"   → Finish reason: {finish_reason}")
+        print(f"   -> Finish reason: {finish_reason}")
 
         if finish_reason == "stop" or not message.tool_calls:
             final_text = message.content or "Task completed."
-            print(f"   ✅ Agent finished: {final_text[:100]}")
+            print(f"   [OK] Agent finished: {final_text[:100]}")
             break
 
         tool_calls = message.tool_calls
@@ -333,13 +350,13 @@ def run_agent(scenario: dict, progress_callback=None):
                 tool_input = json.loads(tc.function.arguments)
             except json.JSONDecodeError as e:
                 tool_input = {}
-                print(f"   ⚠️  Failed to parse tool arguments for {tool_name}: {e}")
+                print(f"   [WARN]  Failed to parse tool arguments for {tool_name}: {e}")
 
             tool_id = tc.id
-            print(f"   🔧 Tool: {tool_name}({json.dumps(tool_input)[:80]})")
+            print(f"   [TOOL] Tool: {tool_name}({json.dumps(tool_input)[:80]})")
 
             tool_result = execute_tool(tool_name, tool_input, apps)
-            print(f"   📦 Result: {tool_result[:100]}...")
+            print(f"   [RESULT] Result: {tool_result[:100]}...")
 
             step = {
                 "iteration":   iteration,
@@ -360,9 +377,9 @@ def run_agent(scenario: dict, progress_callback=None):
             })
     else:
         hit_iteration_limit = True
-        print(f"   ⚠️  Hit iteration limit ({max_iterations}) without agent stopping")
+        print(f"   [WARN]  Hit iteration limit ({max_iterations}) without agent stopping")
 
-    # ── EPISODE COMPLETE — SCORING ───────────────────────────
+    # -- EPISODE COMPLETE - SCORING ---------------------------
     required_set = set(scenario["required_actions"])
     taken_set    = set(taken_actions)
     tools_ok     = required_set.issubset(taken_set)
@@ -374,7 +391,7 @@ def run_agent(scenario: dict, progress_callback=None):
             state_ok, state_reasons = scenario["success_check"](apps)
         except Exception as e:
             state_ok = False
-            state_reasons = [f"❌ State check raised an exception: {str(e)}"]
+            state_reasons = [f"[FAIL] State check raised an exception: {str(e)}"]
 
     finished_cleanly = not hit_iteration_limit
     task_success = tools_ok and state_ok and finished_cleanly
@@ -392,11 +409,11 @@ def run_agent(scenario: dict, progress_callback=None):
     reward_result["finished_cleanly"]    = finished_cleanly
 
     reward_result["breakdown"].append("")
-    reward_result["breakdown"].append("── State check ──")
+    reward_result["breakdown"].append("-- State check --")
     for line in state_reasons:
         reward_result["breakdown"].append(line)
     if not finished_cleanly:
-        reward_result["breakdown"].append("⚠️  Agent hit the iteration limit without stopping cleanly")
+        reward_result["breakdown"].append("[WARN]  Agent hit the iteration limit without stopping cleanly")
 
     episode = log_episode(
         scenario_id=scenario["id"],
@@ -404,10 +421,13 @@ def run_agent(scenario: dict, progress_callback=None):
         agent_steps=agent_steps,
     )
 
-    # ── EXTRACT LESSON FROM THIS EPISODE (NEW) ───────────────
+    print(f"\n   [OK] State check complete (passed={state_ok}). Episode logged.", flush=True)
+
+    # -- EXTRACT LESSON FROM THIS EPISODE (NEW) ---------------
     # Uses Groq to look at what happened and distill a 1-2 sentence
     # lesson that'll be injected into the system prompt next time.
-    print(f"\n   🎓 Extracting lesson from this episode...")
+    # Hard-timeouted (30s) inside extract_lesson so it can't hang the run.
+    print(f"   [LESSON] Extracting lesson from this episode (Groq, 30s timeout)...", flush=True)
     new_lesson = extract_lesson(
         scenario_name=scenario["name"],
         agent_prompt=scenario["agent_prompt"],
@@ -423,18 +443,18 @@ def run_agent(scenario: dict, progress_callback=None):
             episode_number=episode["episode_number"],
             score=reward_result["score"],
         )
-        print(f"   💡 New lesson saved: {new_lesson[:150]}")
+        print(f"   [LESSON] New lesson saved: {new_lesson[:150]}", flush=True)
         reward_result["new_lesson"] = new_lesson
     else:
-        print(f"   ⚠️  No lesson extracted (extractor returned empty)")
+        print(f"   [WARN]  No lesson extracted (skipped or extractor returned empty)", flush=True)
         reward_result["new_lesson"] = ""
 
-    # ── FINAL LOG ────────────────────────────────────────────
-    print(f"\n{'─'*40}")
-    print(f"SCORE: {reward_result['score']}  (normalized {reward_result['normalized_score']})")
-    print(f"SUCCESS: {task_success}  (tools_ok={tools_ok}, state_ok={state_ok}, finished_cleanly={finished_cleanly})")
+    # -- FINAL LOG --------------------------------------------
+    print(f"\n{'-'*40}", flush=True)
+    print(f"SCORE: {reward_result['score']}  (normalized {reward_result['normalized_score']})", flush=True)
+    print(f"SUCCESS: {task_success}  (tools_ok={tools_ok}, state_ok={state_ok}, finished_cleanly={finished_cleanly})", flush=True)
     for line in reward_result["breakdown"]:
-        print(f"   {line}")
+        print(f"   {line}", flush=True)
 
     return {
         "episode": episode,
