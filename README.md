@@ -1,12 +1,15 @@
 ---
 title: AI Enterprise Workflow Environment
-emoji: 🤖
+
 colorFrom: blue
 colorTo: purple
 sdk: docker
 app_file: app.py
 pinned: false
 ---
+
+<!-- @format -->
+
 # AI Enterprise Workflow Environment
 
 > An **OpenEnv-compliant environment** for training LLM agents on long-horizon, multi-app enterprise workflows. Built for the **Meta PyTorch OpenEnv Ã— Scaler School of Technology Hackathon** (April 2026).
@@ -65,31 +68,31 @@ with EnterpriseWorkflowEnv(
 
 ### The 5 mock apps (20 tools)
 
-| App | Tools |
-|---|---|
-| **Email** | read_inbox, read_email, send_email, reply_email |
-| **Chat** | list_channels, read_channel, post_message |
-| **CRM** | get_deal, update_deal_stage, add_note, get_contact, create_contact |
-| **Tasks** | list_tasks, get_task, create_task, assign_task, close_task |
-| **Calendar** | list_meetings, check_conflicts, book_meeting |
+| App          | Tools                                                              |
+| ------------ | ------------------------------------------------------------------ |
+| **Email**    | read_inbox, read_email, send_email, reply_email                    |
+| **Chat**     | list_channels, read_channel, post_message                          |
+| **CRM**      | get_deal, update_deal_stage, add_note, get_contact, create_contact |
+| **Tasks**    | list_tasks, get_task, create_task, assign_task, close_task         |
+| **Calendar** | list_meetings, check_conflicts, book_meeting                       |
 
 ### The 4 scenarios
 
-| Scenario | Required tools | Purpose |
-|---|---|---|
-| Morning Check-in | 2 | Easy curriculum â€” gives untrained models a non-zero reward signal (build-guide Section 6) |
-| Deal Rescue | 8 | Acme Corp cancels their contract. Agent must read, offer discount, update deal, book follow-up, post to sales channel |
-| Team Conflict | 6 | Two engineers claimed the same task. Agent must reassign, resolve, and schedule a sync |
-| Client Onboarding | 7 | New lead emails expressing interest. Agent must create contact, onboarding tasks, kickoff meeting, welcome reply |
+| Scenario          | Required tools | Purpose                                                                                                               |
+| ----------------- | -------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Morning Check-in  | 2              | Easy curriculum â€” gives untrained models a non-zero reward signal (build-guide Section 6)                           |
+| Deal Rescue       | 8              | Acme Corp cancels their contract. Agent must read, offer discount, update deal, book follow-up, post to sales channel |
+| Team Conflict     | 6              | Two engineers claimed the same task. Agent must reassign, resolve, and schedule a sync                                |
+| Client Onboarding | 7              | New lead emails expressing interest. Agent must create contact, onboarding tasks, kickoff meeting, welcome reply      |
 
 ### Sparse reward, long-horizon
 
 Per build-guide Section 2: 0 reward per intermediate step, full episode reward on terminal step.
-reset()   -> scenario context + agent_prompt + required_actions
-step()    -> tool_result + sparse_reward (0)
-step()    -> tool_result + sparse_reward (0)
+reset() -> scenario context + agent_prompt + required_actions
+step() -> tool_result + sparse_reward (0)
+step() -> tool_result + sparse_reward (0)
 ...
-step()    -> full_episode_reward + done=True
+step() -> full_episode_reward + done=True
 (fires when required tools called AND state_check passes)
 
 ---
@@ -98,12 +101,12 @@ step()    -> full_episode_reward + done=True
 
 Per build-guide **Section 7** â€” 4 independent reward functions instead of 1 scalar:
 
-| Function | Range | What it rewards |
-|---|---|---|
-| tool_correctness_reward | 0 to N | Calling each required tool at least once |
-| tool_efficiency_reward | -K to 0 | Penalizes duplicates (-0.5) and unnecessary calls (-1.0) |
-| task_completion_reward | 0 or +10 | State-based check: did the apps actually end up in the right state? |
-| format_validity_reward | 0 or +2 | No errors, no hallucinated tools, no missing args |
+| Function                | Range    | What it rewards                                                     |
+| ----------------------- | -------- | ------------------------------------------------------------------- |
+| tool_correctness_reward | 0 to N   | Calling each required tool at least once                            |
+| tool_efficiency_reward  | -K to 0  | Penalizes duplicates (-0.5) and unnecessary calls (-1.0)            |
+| task_completion_reward  | 0 or +10 | State-based check: did the apps actually end up in the right state? |
+| format_validity_reward  | 0 or +2  | No errors, no hallucinated tools, no missing args                   |
 
 TRL's GRPOTrainer takes `reward_funcs=[fn1, fn2, fn3, fn4]` as a list and tracks each axis independently in metrics.
 
@@ -147,10 +150,10 @@ Uses Google Calendar API v3 with OAuth 2.0 installed-app flow. Scopes limited to
 
 The environment can book actual meetings, read real emails, and send real replies â€” proving the simulation extends to production.
 
-| Integration | API | Methods |
-|---|---|---|
-| ðŸ“… **Google Calendar** | Calendar v3 | `list_meetings`, `check_conflicts`, `book_meeting` |
-| ðŸ“§ **Gmail** | Gmail v1 | `read_inbox`, `read_email`, `send_email`, `reply_email` |
+| Integration              | API         | Methods                                                 |
+| ------------------------ | ----------- | ------------------------------------------------------- |
+| ðŸ“… **Google Calendar** | Calendar v3 | `list_meetings`, `check_conflicts`, `book_meeting`      |
+| ðŸ“§ **Gmail**           | Gmail v1    | `read_inbox`, `read_email`, `send_email`, `reply_email` |
 
 Both follow the same OAuth 2.0 pattern. The same agent code that drives mock apps can drive real production systems via a single flag flip â€” `RealCalendarApp` and `RealEmailApp` are drop-in replacements for `CalendarApp` and `EmailApp`.
 
@@ -162,9 +165,9 @@ See [`integrations/google_calendar.py`](integrations/google_calendar.py) and [`i
 
 Before-and-after evidence that the agent learns without any model retraining:
 
-| Scenario | Run 1 reward | Run 2 reward (with memory loop) | Delta |
-|---|---|---|---|
-| Team Conflict | 1 | 21 | **+20** |
+| Scenario      | Run 1 reward | Run 2 reward (with memory loop) | Delta   |
+| ------------- | ------------ | ------------------------------- | ------- |
+| Team Conflict | 1            | 21                              | **+20** |
 
 After each episode, an LLM extracts a 1-2 sentence lesson from the trajectory and final reward. The next episode of the same scenario receives these lessons in its system prompt. No weights changed â€” but behavior changes.
 
@@ -240,30 +243,31 @@ For real Google Calendar integration, see `integrations/test_calendar_auth.py` f
 ---
 
 ## Project structure
+
 scalar-x-meta-/
-|-- openenv/enterprise_workflow_env/      # OpenEnv environment (deployed)
-|   |-- client.py
-|   |-- models.py
-|   |-- openenv.yaml
-|   -- server/
-|       |-- app.py
-|       |-- enterprise_workflow_env_environment.py
-|       |-- mock_apps.py
-|       |-- scenarios.py
-|       -- reward.py
+|-- openenv/enterprise_workflow_env/ # OpenEnv environment (deployed)
+| |-- client.py
+| |-- models.py
+| |-- openenv.yaml
+| -- server/
+| |-- app.py
+| |-- enterprise_workflow_env_environment.py
+| |-- mock_apps.py
+| |-- scenarios.py
+| -- reward.py
 |-- training/
-|   |-- rollout.py                         # Episode runner (WebSocket)
-|   -- train_grpo.py                      # GRPO trainer (TRL)
+| |-- rollout.py # Episode runner (WebSocket)
+| -- train_grpo.py # GRPO trainer (TRL)
 |-- integrations/
-|   |-- google_calendar.py                 # Real Calendar API wrapper
-|   -- test_calendar_auth.py              # OAuth verification
-|-- agent.py                               # Baseline Groq-powered agent
-|-- tools.py                               # 20 tool schemas (OpenAI format)
-|-- mock_apps.py                           # Dashboard copy
-|-- scenarios.py                           # Dashboard copy (4 scenarios)
-|-- reward_funcs.py                        # 4 independent reward fns
-|-- memory.py                              # Between-episode lessons
-|-- dashboard.py                           # Streamlit demo UI
+| |-- google_calendar.py # Real Calendar API wrapper
+| -- test_calendar_auth.py # OAuth verification
+|-- agent.py # Baseline Groq-powered agent
+|-- tools.py # 20 tool schemas (OpenAI format)
+|-- mock_apps.py # Dashboard copy
+|-- scenarios.py # Dashboard copy (4 scenarios)
+|-- reward_funcs.py # 4 independent reward fns
+|-- memory.py # Between-episode lessons
+|-- dashboard.py # Streamlit demo UI
 -- REWARD_HACKING_AUDIT.md
 
 ---
@@ -287,6 +291,7 @@ scalar-x-meta-/
 Captures nuances of a partially observable enterprise world across 5 apps. Real Calendar integration extends to actual SaaS APIs.
 
 **Also:**
+
 - **Theme #2 (Long-Horizon):** Deal Rescue = 8 coordinated calls, sparse delayed reward.
 - **Theme #4 (Self-Improvement):** memory loop: Team Conflict 1 -> 21 without retraining.
 
@@ -323,4 +328,3 @@ Submitted for the Meta PyTorch OpenEnv Ã— Scaler School of Technology Hackath
 ## License
 
 MIT.
-
