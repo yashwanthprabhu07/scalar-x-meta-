@@ -1,41 +1,38 @@
+
+Copy
+
 # ============================================================
 # dashboard.py — Streamlit Dashboard
 # Run with: streamlit run dashboard.py
 # ============================================================
-
+ 
 import streamlit as st
 import threading
 import queue
 import time
-
+ 
 from scenarios import SCENARIOS, get_scenario_instance
 from agent import run_agent
-
-# Module-level queue. Background worker writes here; the Streamlit
-# main thread drains it on every rerun. Keeping it at module scope
-# avoids the well-known "session_state can't share queues across
-# rerun cycles cleanly" pitfall.
+ 
 _STEP_QUEUE: queue.Queue = queue.Queue()
-
-
-# Tool -> accent color, for live-feed visual grouping.
+ 
 _TOOL_ACCENTS = (
     (("read_inbox", "read_email", "send_email", "reply_email"),               "#58a6ff"),
     (("list_channels", "read_channel", "post_message"),                       "#d2a8ff"),
     (("get_deal", "update_deal_stage", "add_note", "get_contact",
-      "create_contact"),                                                      "#f78166"),
+      "create_contact"),                                                       "#f78166"),
     (("list_tasks", "get_task", "create_task", "assign_task", "close_task"),  "#7ee787"),
     (("list_meetings", "check_conflicts", "book_meeting"),                    "#ffd166"),
 )
-
-
+ 
+ 
 def _tool_color(name: str) -> str:
     for prefixes, color in _TOOL_ACCENTS:
         if name in prefixes:
             return color
     return "#58a6ff"
-
-
+ 
+ 
 # ─────────────────────────────────────────────
 # PAGE CONFIG
 # ─────────────────────────────────────────────
@@ -45,8 +42,8 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
-
+ 
+ 
 # ─────────────────────────────────────────────
 # CSS
 # ─────────────────────────────────────────────
@@ -54,7 +51,7 @@ st.markdown(
     """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
-
+ 
 :root {
   --bg:      #0a0e14;
   --panel:   #11161e;
@@ -69,7 +66,7 @@ st.markdown(
   --yellow:  #ffd166;
   --red:     #f87171;
 }
-
+ 
 .stApp {
   background:
     radial-gradient(circle at 12% -5%, rgba(88,166,255,0.10) 0%, transparent 35%),
@@ -77,13 +74,12 @@ st.markdown(
     var(--bg);
   color: var(--text);
 }
-
+ 
 section[data-testid="stSidebar"] {
   background-color: var(--panel) !important;
   border-right: 1px solid var(--line);
 }
-
-/* Hero */
+ 
 .hero-wrap { display:flex; align-items:center; gap:1rem; padding: 0.4rem 0 0.2rem 0; }
 .hero-mark {
   width:44px; height:44px; border-radius:11px;
@@ -114,8 +110,7 @@ section[data-testid="stSidebar"] {
 .pill.green  { background: rgba(126,231,135,0.08); color:#aff0b3; border-color: rgba(126,231,135,0.25); }
 .pill.orange { background: rgba(247,129,102,0.08); color:#ffb39a; border-color: rgba(247,129,102,0.30); }
 .pill.purple { background: rgba(210,168,255,0.08); color:#e1c3ff; border-color: rgba(210,168,255,0.30); }
-
-/* Section headers */
+ 
 .section-h {
   display:flex; align-items:center; gap:0.55rem;
   margin: 0.6rem 0 0.55rem 0;
@@ -127,8 +122,7 @@ section[data-testid="stSidebar"] {
   width:8px; height:8px; border-radius: 50%; background: var(--blue);
   box-shadow: 0 0 10px var(--blue);
 }
-
-/* Cards */
+ 
 .card {
   background: var(--panel-2);
   border: 1px solid var(--line);
@@ -136,8 +130,7 @@ section[data-testid="stSidebar"] {
   padding: 0.9rem 1rem;
 }
 .card.tight { padding: 0.6rem 0.8rem; }
-
-/* Live step card */
+ 
 .step-card {
   background: var(--panel-2);
   border: 1px solid var(--line);
@@ -155,8 +148,7 @@ section[data-testid="stSidebar"] {
 .step-args   { color: #cdd9e5; margin-top: 4px; font-size: 0.72rem; word-break: break-all; }
 .step-result { color: #aff0b3; margin-top: 3px; font-size: 0.72rem; word-break: break-all; }
 .step-result.err { color: #ff9f9f; }
-
-/* Score badge */
+ 
 .score-badge {
   display:inline-flex; align-items:center; gap:0.5rem;
   font-family: 'Space Grotesk', sans-serif;
@@ -167,8 +159,7 @@ section[data-testid="stSidebar"] {
 .score-positive { background: linear-gradient(135deg, #196c2e, #2ea043); box-shadow: 0 0 32px rgba(46,160,67,0.35); }
 .score-negative { background: linear-gradient(135deg, #6e2316, #b62324); box-shadow: 0 0 32px rgba(182,35,36,0.30); }
 .score-zero     { background: linear-gradient(135deg, #3a3f47, #5c6370); }
-
-/* Metric cards */
+ 
 .metric-card {
   background: var(--panel-2);
   border: 1px solid var(--line);
@@ -186,8 +177,7 @@ section[data-testid="stSidebar"] {
   margin-top: 0.3rem;
   text-transform: uppercase; letter-spacing: 0.6px;
 }
-
-/* Status pulse */
+ 
 .status-running {
   display:inline-flex; align-items:center; gap:0.55rem;
   background: rgba(88,166,255,0.10);
@@ -206,8 +196,7 @@ section[data-testid="stSidebar"] {
   0%, 100% { opacity: 0.4; transform: scale(0.85); }
   50%      { opacity: 1.0; transform: scale(1.10); }
 }
-
-/* Reward breakdown rows */
+ 
 .rb-row {
   display:flex; align-items:flex-start; gap:0.45rem;
   font-family: 'JetBrains Mono', monospace; font-size: 0.76rem;
@@ -217,8 +206,7 @@ section[data-testid="stSidebar"] {
 .rb-pos     { color: #aff0b3; }
 .rb-neg     { color: #ff9f9f; }
 .rb-neutral { color: var(--mute); }
-
-/* Lesson card */
+ 
 .lesson-card {
   border: 1px dashed rgba(210,168,255,0.45);
   background: rgba(210,168,255,0.06);
@@ -226,8 +214,7 @@ section[data-testid="stSidebar"] {
   font-family: 'Inter', sans-serif; font-size: 0.84rem;
   color: #e1c3ff;
 }
-
-/* Buttons */
+ 
 .stButton > button {
   background: linear-gradient(135deg, #1f6feb, #388bfd);
   color: white; border: none; border-radius: 8px;
@@ -243,17 +230,16 @@ section[data-testid="stSidebar"] {
 .stButton > button:disabled {
   background: #232a34; color: #8b949e; box-shadow: none;
 }
-
+ 
 footer    { visibility: hidden; }
 #MainMenu { visibility: hidden; }
-
 .block-container { padding-top: 1.2rem !important; }
 </style>
 """,
     unsafe_allow_html=True,
 )
-
-
+ 
+ 
 # ─────────────────────────────────────────────
 # SESSION STATE
 # ─────────────────────────────────────────────
@@ -269,11 +255,11 @@ def _init_state():
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
-
-
+ 
+ 
 _init_state()
-
-
+ 
+ 
 # ─────────────────────────────────────────────
 # THREAD HELPERS
 # ─────────────────────────────────────────────
@@ -283,7 +269,7 @@ def _drain_queue():
             item = _STEP_QUEUE.get_nowait()
         except queue.Empty:
             return
-
+ 
         if "__done__" in item:
             st.session_state.running = False
             if item.get("__error__"):
@@ -291,46 +277,85 @@ def _drain_queue():
             else:
                 result = item["result"]
                 st.session_state.last_result = result
-                ep = result["episode"]
+ 
+                # ── FIX: defensive key resolution ──────────────────────────
+                # log_episode may return keys at the top level of `episode`,
+                # or score/task_success may live inside reward_result instead.
+                # We try both locations so the graph always gets populated.
+                ep     = result.get("episode", {})
+                reward = result.get("reward", {})
+ 
+                # score: prefer episode dict, fall back to reward dict
+                score = (
+                    ep.get("score")
+                    if ep.get("score") is not None
+                    else reward.get("score", 0)
+                )
+ 
+                # task_success: prefer episode dict, fall back to reward dict
+                task_success = (
+                    ep.get("task_success")
+                    if ep.get("task_success") is not None
+                    else reward.get("task_success", False)
+                )
+ 
+                # steps_taken: prefer episode dict, fall back to len(steps)
+                steps_taken = (
+                    ep.get("steps_taken")
+                    if ep.get("steps_taken") is not None
+                    else len(result.get("steps", []))
+                )
+ 
+                # scenario_id: prefer episode dict, fall back to active scenario
+                scenario_id = (
+                    ep.get("scenario_id")
+                    or (st.session_state.active_scenario or {}).get("id", "unknown")
+                )
+ 
+                # timestamp
+                timestamp = ep.get("timestamp", time.strftime("%Y-%m-%dT%H:%M:%S"))
+ 
+                episode_number = len(st.session_state.episode_history) + 1
+ 
                 st.session_state.episode_history.append({
-                    "episode_number": len(st.session_state.episode_history) + 1,
-                    "scenario_id":    ep["scenario_id"],
-                    "score":          ep["score"],
-                    "task_success":   ep["task_success"],
-                    "steps_taken":    ep["steps_taken"],
-                    "timestamp":      ep["timestamp"],
+                    "episode_number": episode_number,
+                    "scenario_id":    scenario_id,
+                    "score":          score,
+                    "task_success":   task_success,
+                    "steps_taken":    steps_taken,
+                    "timestamp":      timestamp,
                 })
+                # ── END FIX ────────────────────────────────────────────────
         else:
             st.session_state.live_steps.append(item)
-
-
+ 
+ 
 def _start_agent_run(scenario: dict):
-    """Reset per-run state and launch the agent in a background thread."""
     st.session_state.running         = True
     st.session_state.live_steps      = []
     st.session_state.last_result     = None
     st.session_state.active_scenario = scenario
     st.session_state.started_at      = time.time()
-
+ 
     while not _STEP_QUEUE.empty():
         try:
             _STEP_QUEUE.get_nowait()
         except queue.Empty:
             break
-
+ 
     def _worker():
         def on_step(step):
             _STEP_QUEUE.put(step)
-
+ 
         try:
             result = run_agent(scenario=scenario, progress_callback=on_step)
             _STEP_QUEUE.put({"__done__": True, "result": result})
         except Exception as e:
             _STEP_QUEUE.put({"__done__": True, "result": None, "__error__": str(e)})
-
+ 
     threading.Thread(target=_worker, daemon=True).start()
-
-
+ 
+ 
 # ─────────────────────────────────────────────
 # HEADER
 # ─────────────────────────────────────────────
@@ -353,15 +378,15 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.write("")
-
-
+ 
+ 
 # ─────────────────────────────────────────────
 # SIDEBAR
 # ─────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### ⚙️ Control Panel")
     st.markdown("---")
-
+ 
     scenario_names    = [s["name"] for s in SCENARIOS]
     selected_name     = st.selectbox(
         "Scenario",
@@ -369,19 +394,19 @@ with st.sidebar:
         disabled=st.session_state.running,
     )
     selected_template = next(s for s in SCENARIOS if s["name"] == selected_name)
-
+ 
     st.markdown("**Description**")
     st.info(selected_template["description"])
-
+ 
     st.markdown("**Required Actions**")
     actions_html = "".join(
         f"<span class='pill' style='margin:2px 4px 2px 0;font-size:.65rem'>{a}</span>"
         for a in selected_template["required_actions"]
     )
     st.markdown(actions_html, unsafe_allow_html=True)
-
+ 
     st.markdown("---")
-
+ 
     run_clicked   = st.button(
         "▶ Run Agent" if not st.session_state.running else "⏳ Agent Running…",
         disabled=st.session_state.running,
@@ -389,7 +414,7 @@ with st.sidebar:
     rerun_clicked = False
     if st.session_state.last_result and not st.session_state.running:
         rerun_clicked = st.button("🔄 Run Again (fresh randomized episode)")
-
+ 
     st.markdown("---")
     st.markdown("**Reward Rules**")
     st.markdown(
@@ -401,7 +426,7 @@ with st.sidebar:
 - 💀 Task failed: **−10**
         """
     )
-
+ 
     st.markdown("---")
     st.markdown("**Hackathon Themes**")
     for theme in [
@@ -411,7 +436,7 @@ with st.sidebar:
         "Multi-App Coordination",
     ]:
         st.markdown(f"• {theme}")
-
+ 
     st.markdown("---")
     if st.button("🗑 Clear History", disabled=st.session_state.running):
         st.session_state.episode_history = []
@@ -419,35 +444,31 @@ with st.sidebar:
         st.session_state.live_steps      = []
         st.session_state.active_scenario = None
         st.rerun()
-
-
+ 
+ 
 # ─────────────────────────────────────────────
 # TRIGGER RUNS
 # ─────────────────────────────────────────────
-# Each trigger generates a fresh randomized scenario instance, so consecutive
-# runs of the same scenario template see different clients, amounts, etc.
 if run_clicked:
     _start_agent_run(get_scenario_instance(selected_template["id"]))
 elif rerun_clicked:
     _start_agent_run(get_scenario_instance(selected_template["id"]))
-
-
-# Drain anything the worker has produced since the last rerun.
+ 
 _drain_queue()
-
-
+ 
+ 
 # ─────────────────────────────────────────────
 # MAIN LAYOUT
 # ─────────────────────────────────────────────
 col_left, col_right = st.columns([3, 2])
-
+ 
 # ── LEFT: Live Agent Feed ─────────────────────
 with col_left:
     st.markdown(
         '<div class="section-h"><span class="dot"></span>Live Agent Feed</div>',
         unsafe_allow_html=True,
     )
-
+ 
     if st.session_state.running:
         elapsed = int(time.time() - (st.session_state.started_at or time.time()))
         st.markdown(
@@ -457,11 +478,10 @@ with col_left:
             </div>""",
             unsafe_allow_html=True,
         )
-
+ 
     steps  = st.session_state.live_steps
     active = st.session_state.active_scenario
-
-    # Progress against required actions for the *currently active* (randomized) scenario
+ 
     if active and (st.session_state.running or steps):
         required_unique = list(dict.fromkeys(active["required_actions"]))
         taken_set       = {s.get("tool_name") for s in steps}
@@ -470,10 +490,10 @@ with col_left:
             min(done_n / max(1, len(required_unique)), 1.0),
             text=f"Required actions called: {done_n}/{len(required_unique)}",
         )
-
+ 
         with st.expander("📜 Agent prompt for this episode", expanded=False):
             st.code(active["agent_prompt"], language="markdown")
-
+ 
     if steps:
         steps_html = ""
         for i, step in enumerate(steps, 1):
@@ -502,32 +522,32 @@ with col_left:
             </div>""",
             unsafe_allow_html=True,
         )
-
-
+ 
+ 
 # ── RIGHT: Episode Results ────────────────────
 with col_right:
     st.markdown(
         '<div class="section-h"><span class="dot" style="background:#7ee787;box-shadow:0 0 10px #7ee787"></span>Episode Results</div>',
         unsafe_allow_html=True,
     )
-
+ 
     result = st.session_state.last_result
-
+ 
     if result and result.get("__error__"):
         st.error(f"❌ Agent error: {result['__error__']}")
-
+ 
     elif result:
         reward  = result["reward"]
         score   = reward["score"]
         success = reward["task_success"]
-
+ 
         if score > 0:
             badge_class = "score-positive"
         elif score < 0:
             badge_class = "score-negative"
         else:
             badge_class = "score-zero"
-
+ 
         st.markdown(
             f'<div class="score-badge {badge_class}">Score: {score:+d}</div>',
             unsafe_allow_html=True,
@@ -536,7 +556,7 @@ with col_right:
             st.success("✅ TASK SUCCEEDED")
         else:
             st.error("❌ TASK FAILED")
-
+ 
         m1, m2, m3 = st.columns(3)
         with m1:
             st.markdown(
@@ -566,17 +586,15 @@ with col_right:
                 </div>""",
                 unsafe_allow_html=True,
             )
-
+ 
         st.markdown("&nbsp;", unsafe_allow_html=True)
         st.markdown("**Reward Breakdown**")
-
+ 
         rb_html = ""
         for line in reward["breakdown"]:
             line_s = line.strip()
             if not line_s:
                 rb_html += "<div style='height:.4rem'></div>"
-            # Section headers start with "-- " or "── " (ASCII vs unicode dashes)
-            # — must be checked BEFORE the single-dash branch.
             elif line_s.startswith("-- ") or line_s.startswith("── "):
                 rb_html += f"<div class='rb-row rb-neutral' style='margin-top:.3rem'><span>{line_s}</span></div>"
             elif line_s.startswith("+"):
@@ -586,7 +604,7 @@ with col_right:
             else:
                 rb_html += f"<div class='rb-row rb-neutral'><span class='tag'>•</span><span>{line_s}</span></div>"
         st.markdown(f"<div class='card tight'>{rb_html}</div>", unsafe_allow_html=True)
-
+ 
         new_lesson = reward.get("new_lesson")
         if new_lesson:
             st.markdown("&nbsp;", unsafe_allow_html=True)
@@ -595,7 +613,7 @@ with col_right:
                 f"<div class='lesson-card'>{new_lesson}</div>",
                 unsafe_allow_html=True,
             )
-
+ 
     else:
         st.markdown(
             """<div class='card' style='text-align:center;color:var(--mute);padding:2rem 1rem;'>
@@ -606,23 +624,23 @@ with col_right:
             </div>""",
             unsafe_allow_html=True,
         )
-
-
+ 
+ 
 # ─────────────────────────────────────────────
-# IMPROVEMENT GRAPH
+# SELF-IMPROVEMENT GRAPH
 # ─────────────────────────────────────────────
 st.markdown("---")
 st.markdown(
     '<div class="section-h"><span class="dot" style="background:#f78166;box-shadow:0 0 10px #f78166"></span>Self-Improvement Over Episodes</div>',
     unsafe_allow_html=True,
 )
-
+ 
 history = st.session_state.episode_history
-
+ 
 if len(history) >= 1:
     import pandas as pd
     import plotly.express as px
-
+ 
     df = pd.DataFrame(
         [
             {
@@ -633,7 +651,7 @@ if len(history) >= 1:
             for ep in history
         ]
     )
-
+ 
     fig = px.line(
         df, x="Episode", y="Score", color="Scenario", markers=True,
         labels={"Score": "Reward Score", "Episode": "Episode #"},
@@ -662,8 +680,8 @@ else:
         </div>""",
         unsafe_allow_html=True,
     )
-
-
+ 
+ 
 # ─────────────────────────────────────────────
 # HISTORY TABLE
 # ─────────────────────────────────────────────
@@ -687,8 +705,8 @@ if len(history) >= 1:
         ]
     )
     st.dataframe(df_hist, use_container_width=True, hide_index=True)
-
-
+ 
+ 
 # ─────────────────────────────────────────────
 # FOOTER
 # ─────────────────────────────────────────────
@@ -705,8 +723,8 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
-
-
+ 
+ 
 # ─────────────────────────────────────────────
 # AUTO-REFRESH WHILE RUNNING
 # ─────────────────────────────────────────────
