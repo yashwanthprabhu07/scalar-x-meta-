@@ -1,6 +1,6 @@
 ---
 title: AI Enterprise Workflow Environment
-emoji: 🏢
+emoji: 🤖
 colorFrom: blue
 colorTo: purple
 sdk: docker
@@ -9,11 +9,11 @@ pinned: false
 ---
 # AI Enterprise Workflow Environment
 
-> An **OpenEnv-compliant environment** for training LLM agents on long-horizon, multi-app enterprise workflows. Built for the **Meta PyTorch OpenEnv × Scaler School of Technology Hackathon** (April 2026).
+> An **OpenEnv-compliant environment** for training LLM agents on long-horizon, multi-app enterprise workflows. Built for the **Meta PyTorch OpenEnv Ã— Scaler School of Technology Hackathon** (April 2026).
 
-**Theme #3.1 — World Modeling / Professional Tasks**
+**Theme #3.1 â€” World Modeling / Professional Tasks**
 
-**[Try the live environment →](https://huggingface.co/spaces/yashwanthprabhu/enterprise-workflow-env)**
+**[Try the live environment â†’](https://huggingface.co/spaces/yashwanthprabhu/enterprise-workflow-env)**
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![OpenEnv 0.2.3](https://img.shields.io/badge/OpenEnv-0.2.3-green.svg)](https://github.com/meta-pytorch/OpenEnv)
@@ -24,16 +24,16 @@ pinned: false
 
 ## The problem
 
-Modern AI agents are increasingly expected to handle **cross-app enterprise workflows** — the kind a human employee does every day: read an email, check a CRM deal, reply with a tailored offer, book a meeting, post a Slack update. These workflows require long-horizon planning, real-world state awareness, and integration with multiple SaaS tools.
+Modern AI agents are increasingly expected to handle **cross-app enterprise workflows** â€” the kind a human employee does every day: read an email, check a CRM deal, reply with a tailored offer, book a meeting, post a Slack update. These workflows require long-horizon planning, real-world state awareness, and integration with multiple SaaS tools.
 
-Training agents for this is hard. You cannot grade text output alone — you must grade **outcomes**: did the deal actually get updated in CRM? Did the meeting actually appear on the calendar? Did the reply go to the right person?
+Training agents for this is hard. You cannot grade text output alone â€” you must grade **outcomes**: did the deal actually get updated in CRM? Did the meeting actually appear on the calendar? Did the reply go to the right person?
 
 This project builds the infrastructure to train and evaluate such agents:
 
 1. **An OpenEnv-compliant environment** modeling 5 mock SaaS apps with 20 tools.
 2. **4 scenarios** ranging from easy curriculum tasks to 8-tool long-horizon coordination.
-3. **4 independent reward functions** — hack-resistant by design.
-4. **A real Google Calendar integration** — the agent can book actual meetings, not just simulated ones.
+3. **4 independent reward functions** â€” hack-resistant by design.
+4. **A real Google Calendar integration** â€” the agent can book actual meetings, not just simulated ones.
 5. **A complete TRL training pipeline** ready for GRPO on the live environment.
 
 ---
@@ -77,7 +77,7 @@ with EnterpriseWorkflowEnv(
 
 | Scenario | Required tools | Purpose |
 |---|---|---|
-| Morning Check-in | 2 | Easy curriculum — gives untrained models a non-zero reward signal (build-guide Section 6) |
+| Morning Check-in | 2 | Easy curriculum â€” gives untrained models a non-zero reward signal (build-guide Section 6) |
 | Deal Rescue | 8 | Acme Corp cancels their contract. Agent must read, offer discount, update deal, book follow-up, post to sales channel |
 | Team Conflict | 6 | Two engineers claimed the same task. Agent must reassign, resolve, and schedule a sync |
 | Client Onboarding | 7 | New lead emails expressing interest. Agent must create contact, onboarding tasks, kickoff meeting, welcome reply |
@@ -96,7 +96,7 @@ step()    -> full_episode_reward + done=True
 
 ## Reward design (hack-resistant)
 
-Per build-guide **Section 7** — 4 independent reward functions instead of 1 scalar:
+Per build-guide **Section 7** â€” 4 independent reward functions instead of 1 scalar:
 
 | Function | Range | What it rewards |
 |---|---|---|
@@ -111,7 +111,7 @@ TRL's GRPOTrainer takes `reward_funcs=[fn1, fn2, fn3, fn4]` as a list and tracks
 
 Every scenario defines a `success_check(apps) -> (passed, reasons)` function that inspects the final state of the mock apps. For Deal Rescue this checks:
 
-- Acme deal stage updated to Negotiation (not just that `update_deal_stage` was called — actual state changed)
+- Acme deal stage updated to Negotiation (not just that `update_deal_stage` was called â€” actual state changed)
 - A new note added to the Acme deal
 - A follow-up meeting exists (not in the seeded set)
 - A reply was sent to the Acme contact
@@ -125,7 +125,7 @@ See [REWARD_HACKING_AUDIT.md](REWARD_HACKING_AUDIT.md) for a full exploit analys
 
 ## Real-world Google Calendar integration
 
-Most hackathon projects stop at simulation. This one goes further — **the same agent code can book real meetings on a real Google Calendar** via OAuth.
+Most hackathon projects stop at simulation. This one goes further â€” **the same agent code can book real meetings on a real Google Calendar** via OAuth.
 
 ```python
 from integrations.google_calendar import RealCalendarApp
@@ -145,14 +145,14 @@ Uses Google Calendar API v3 with OAuth 2.0 installed-app flow. Scopes limited to
 
 ### Real-World Integrations (OAuth 2.0)
 
-The environment can book actual meetings, read real emails, and send real replies — proving the simulation extends to production.
+The environment can book actual meetings, read real emails, and send real replies â€” proving the simulation extends to production.
 
 | Integration | API | Methods |
 |---|---|---|
-| 📅 **Google Calendar** | Calendar v3 | `list_meetings`, `check_conflicts`, `book_meeting` |
-| 📧 **Gmail** | Gmail v1 | `read_inbox`, `read_email`, `send_email`, `reply_email` |
+| ðŸ“… **Google Calendar** | Calendar v3 | `list_meetings`, `check_conflicts`, `book_meeting` |
+| ðŸ“§ **Gmail** | Gmail v1 | `read_inbox`, `read_email`, `send_email`, `reply_email` |
 
-Both follow the same OAuth 2.0 pattern. The same agent code that drives mock apps can drive real production systems via a single flag flip — `RealCalendarApp` and `RealEmailApp` are drop-in replacements for `CalendarApp` and `EmailApp`.
+Both follow the same OAuth 2.0 pattern. The same agent code that drives mock apps can drive real production systems via a single flag flip â€” `RealCalendarApp` and `RealEmailApp` are drop-in replacements for `CalendarApp` and `EmailApp`.
 
 See [`integrations/google_calendar.py`](integrations/google_calendar.py) and [`integrations/gmail.py`](integrations/gmail.py).
 
@@ -166,7 +166,7 @@ Before-and-after evidence that the agent learns without any model retraining:
 |---|---|---|---|
 | Team Conflict | 1 | 21 | **+20** |
 
-After each episode, an LLM extracts a 1-2 sentence lesson from the trajectory and final reward. The next episode of the same scenario receives these lessons in its system prompt. No weights changed — but behavior changes.
+After each episode, an LLM extracts a 1-2 sentence lesson from the trajectory and final reward. The next episode of the same scenario receives these lessons in its system prompt. No weights changed â€” but behavior changes.
 
 The reward signal the memory loop uses is the **same one a PyTorch policy would use**. When plugged into OpenEnv + GRPO (see training below), the reward function works unchanged.
 
@@ -207,16 +207,16 @@ This is a legitimate scientific finding, not a failure: it validates that the re
 works correctly (it correctly gives 0 reward for non-solutions) and quantifies the gap between
 untrained behavior and task success. Bridging that gap would require one or more of:
 
-1. **SFT warmup** — fine-tune on a small set of correct tool-calling traces first
-2. **Curriculum learning** — start on the Morning Check-in scenario (2 tools) before Deal Rescue (8)
-3. **Larger model** — Qwen2.5-7B has substantially better tool-calling
-4. **More training steps** — 5 steps is a validation run, not a convergence run
+1. **SFT warmup** â€” fine-tune on a small set of correct tool-calling traces first
+2. **Curriculum learning** â€” start on the Morning Check-in scenario (2 tools) before Deal Rescue (8)
+3. **Larger model** â€” Qwen2.5-7B has substantially better tool-calling
+4. **More training steps** â€” 5 steps is a validation run, not a convergence run
 
 Onsite April 25-26 with HuggingFace compute credits, we plan to run full training with
 SFT warmup + curriculum, targeting measurable reward improvement.
 
 The **self-improvement memory loop** (separate from GRPO) demonstrates improvement from
-reward=1 to reward=21 on Team Conflict within two episodes — evidence that the reward
+reward=1 to reward=21 on Team Conflict within two episodes â€” evidence that the reward
 function responds correctly to agent behavior improvements.
 
 ---
@@ -270,20 +270,20 @@ scalar-x-meta-/
 
 ## Tech stack
 
-- **OpenEnv 0.2.3** — environment protocol
-- **HuggingFace TRL + Unsloth** — GRPO trainer with 4-bit QLoRA (faster training, lower VRAM)
-- **HuggingFace Spaces** — environment hosting
-- **FastAPI** — HTTP server
-- **Google Calendar API v3** — real-world integration
-- **Groq + Llama-3.3-70B** — baseline agent LLM
-- **Streamlit** — live demo dashboard
-- **Qwen2.5-1.5B-Instruct** — training target
+- **OpenEnv 0.2.3** â€” environment protocol
+- **HuggingFace TRL + Unsloth** â€” GRPO trainer with 4-bit QLoRA (faster training, lower VRAM)
+- **HuggingFace Spaces** â€” environment hosting
+- **FastAPI** â€” HTTP server
+- **Google Calendar API v3** â€” real-world integration
+- **Groq + Llama-3.3-70B** â€” baseline agent LLM
+- **Streamlit** â€” live demo dashboard
+- **Qwen2.5-1.5B-Instruct** â€” training target
 
 ---
 
 ## How this addresses the hackathon themes
 
-**Primary: Theme #3.1 — World Modeling / Professional Tasks.**
+**Primary: Theme #3.1 â€” World Modeling / Professional Tasks.**
 Captures nuances of a partially observable enterprise world across 5 apps. Real Calendar integration extends to actual SaaS APIs.
 
 **Also:**
@@ -296,8 +296,8 @@ Captures nuances of a partially observable enterprise world across 5 apps. Real 
 
 - **Live Space:** https://huggingface.co/spaces/yashwanthprabhu/enterprise-workflow-env
 - **GitHub repo:** https://github.com/yashwanthprabhu07/scalar-x-meta- (branch: `hackathon-polish`)
-- **Mini-blog:** _coming soon — will be posted on HuggingFace_
-- **Demo video:** _coming soon — will be on YouTube_
+- **Mini-blog:** _coming soon â€” will be posted on HuggingFace_
+- **Demo video:** _coming soon â€” will be on YouTube_
 - **Training reward plots:** [training/reward_curve.png](training/reward_curve.png)
 - **Training metrics (TRL):** [training/trainer_state.json](training/trainer_state.json)
 - **Training summary:** [training/training_run_summary.json](training/training_run_summary.json)
@@ -308,7 +308,7 @@ Captures nuances of a partially observable enterprise world across 5 apps. Real 
 
 **Yashwanth Prabhu R** (team lead), Vivek Gowda NV, Chaitanya S Shetty.
 
-Submitted for the Meta PyTorch OpenEnv × Scaler School of Technology Hackathon, Bangalore, April 25-26, 2026.
+Submitted for the Meta PyTorch OpenEnv Ã— Scaler School of Technology Hackathon, Bangalore, April 25-26, 2026.
 
 ---
 
