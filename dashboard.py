@@ -1,5 +1,5 @@
 
-Copy
+
 
 # ============================================================
 # dashboard.py — Streamlit Dashboard
@@ -730,4 +730,16 @@ st.markdown(
 # ─────────────────────────────────────────────
 if st.session_state.running:
     time.sleep(0.4)
+    st.rerun()
+
+
+# ─────────────────────────────────────────────
+# AUTO-REFRESH WHILE RUNNING
+# ─────────────────────────────────────────────
+if st.session_state.running:
+    time.sleep(0.4)
+    st.rerun()
+elif _STEP_QUEUE.qsize() > 0:
+    # Catch any remaining items after agent finishes
+    _drain_queue()
     st.rerun()
