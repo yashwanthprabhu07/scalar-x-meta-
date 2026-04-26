@@ -1,11 +1,9 @@
 ---
 title: AI Enterprise Workflow Environment
-emoji: 🏢
+emoji: ??
 colorFrom: blue
 colorTo: purple
 sdk: docker
-sdk_version: "4.44.0"
-python_version: "3.10"
 app_file: app.py
 pinned: false
 ---
@@ -325,3 +323,4 @@ Submitted for the Meta PyTorch OpenEnv × Scaler School of Technology Hackathon,
 ## License
 
 MIT.
+
